@@ -7,12 +7,14 @@ StreamEvent,
 TokenStreamEvent,
 LogStreamEvent,
 ErrorStreamEvent,
-# AddKnowledgeRequest,
-# KnowledgeResponse
+AddKnowledgeRequest,
+KnowledgeResponse
 )
 
 __all__ = [
     "BaseEntity",
+    "AddKnowledgeRequest",
+    "KnowledgeResponse"
     "NewsArticle",
     "FinancialStatement",
     "BaseSchema",
@@ -23,3 +25,5 @@ __all__ = [
     "LogStreamEvent",
     "ErrorStreamEvent",
 ]
+
+
