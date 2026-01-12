@@ -5,7 +5,7 @@ from app.db.base import Base
 
 
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = "Users"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     firebase_uid: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
@@ -13,15 +13,14 @@ class User(Base):
 
 
 class Stock(Base):
-    __tablename__ = "stocks"
+    __tablename__ = "stock"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    stock_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    stock_id: Mapped[str] = mapped_column(Text, primary_key=True, unique=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(Text, nullable=False)
 
 
-class PfItem(Base):
-    __tablename__ = "pf_items"
+class UserStock(Base):
+    __tablename__ = "userStock"
     __table_args__ = (
         UniqueConstraint("user_id", "stock_id", name="pf_user_stock_uniq"),
     )
@@ -36,7 +35,7 @@ class PfItem(Base):
 
 
 class Question(Base):
-    __tablename__ = "questions"
+    __tablename__ = "Questions"
     __table_args__ = (
         UniqueConstraint("user_id", "session_id", name="questions_user_session_uniq"),
     )
