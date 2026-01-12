@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: upstage-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: upstage
+    ports:
+      - "5432:5432"
+    volumes:
+      - upstage_pgdata:/var/lib/postgresql/data
+
+volumes:
+  upstage_pgdata:
