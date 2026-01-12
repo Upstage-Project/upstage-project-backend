@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 
-from app.core.db import ChromaDBConnection
+from app.core.chroma_db import ChromaDBConnection
 
 
 class VectorRepository(ABC):
