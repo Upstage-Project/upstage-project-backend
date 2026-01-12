@@ -1,5 +1,4 @@
-from .entities import BaseEntity, NewsArticle, FinancialStatement
-from .schemas import (
+from .agent import  (
 BaseSchema,
 ChatRequest,
 ChatResponse,
@@ -7,14 +6,11 @@ StreamEvent,
 TokenStreamEvent,
 LogStreamEvent,
 ErrorStreamEvent,
-# AddKnowledgeRequest,
-# KnowledgeResponse
+AddKnowledgeRequest,
+KnowledgeResponse
 )
 
 __all__ = [
-    "BaseEntity",
-    "NewsArticle",
-    "FinancialStatement",
     "BaseSchema",
     "ChatRequest",
     "ChatResponse",
@@ -22,4 +18,6 @@ __all__ = [
     "TokenStreamEvent",
     "LogStreamEvent",
     "ErrorStreamEvent",
+    "AddKnowledgeRequest",
+    "KnowledgeResponse"
 ]
