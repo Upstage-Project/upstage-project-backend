@@ -1,7 +1,13 @@
 # app/core/db.py
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from app.core.config import settings
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg2://postgres:postgres@localhost:5432/upstage"
+)
 
 engine = create_engine(
     settings.DATABASE_URL,

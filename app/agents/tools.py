@@ -31,17 +31,36 @@ REPRT_CODE_MAP = {
     "FY": "11011",
 }
 
-# HTML 태그와 엔티티를 제거해서 뉴스 제목/요약을 사람이 읽기 좋은 텍스트로 정리
+@tool
+def search_invest_kb(query: str, config: RunnableConfig) -> str:
+    """ 사용자 질문과 관련된 투자/기업 정보를 내부 KB(VectorDB)에서 검색합니다. """
+    print(f"\n[Tool: Internal KB Search] Query: {query}")
+    try:
+        vector_service: VectorService = config["configurable"].get("vector_service")
+        if not vector_service:
+            return "Error: VectorService not found in config"
+        docs = vector_service.search(query, n_results=5)
+        print(f"[Tool: Internal KB Search] Found {len(docs)} documents.")
+
+        context_parts = []
+        for i, d in enumerate(docs):
+            print(f" - Document {i + 1}: {d.document[:100]}...")
+            context_parts.append(f"Source {i + 1} (Metadata: {d.metadata}):\n{d.document}" )
+            return "\n\n".join(context_parts)
+    except Exception as e:
+        print(f"[Tool: Internal KB Search] Error: {e}")
+        return f"Search Error: {e}"
+
 def clean_html(text: str) -> str:
     text = html.unescape(text or "")
     text = re.sub(r"<[^>]+>", "", text)
     return text.strip()
 
-# URL을 SHA256 해시로 변환해 뉴스/기사의 고유 ID 생성
+
 def make_id(url: str) -> str:
     return hashlib.sha256((url or "").encode("utf-8")).hexdigest()
 
-# 단일 뉴스/기사/재무 정보를 VectorDB에 1건 저장
+
 @tool
 def add_to_invest_kb(
     content: str,
@@ -67,7 +86,7 @@ def add_to_invest_kb(
         print(f"[Tool: Add Knowledge] Error: {e}")
         return {"status": "error", "message": str(e), "metadata": metadata or {}}
 
-# 여러 뉴스/기사/재무 문서를 한 번의 tool call로 VectorDB에 배치 저장
+
 @tool
 def add_many_to_invest_kb(
     contents: List[str],
@@ -120,7 +139,7 @@ def add_many_to_invest_kb(
         print(f"[Tool: Add Many Knowledge] Error: {e}")
         return {"status": "error", "message": str(e), "saved": 0}
 
-# 네이버 뉴스 검색 API를 호출해 원시 뉴스 리스트(dict) 반환
+
 def search_naver_news(topic: str, max_results: int = 20, sort: str = "date") -> List[Dict[str, Any]]:
     client_id = os.getenv("NAVER_CLIENT_ID")
     client_secret = os.getenv("NAVER_CLIENT_SECRET")
@@ -157,7 +176,7 @@ def search_naver_news(topic: str, max_results: int = 20, sort: str = "date") -> 
         })
     return results
 
-# 네이버 뉴스 검색 결과를 표준화된 {status, items} 구조로 반환하는 LLM용 tool
+
 @tool
 def search_news(query: str) -> Dict[str, Any]:
     print(f"\n[Tool: News Search(Naver)] Query: {query}")
@@ -170,7 +189,7 @@ def search_news(query: str) -> Dict[str, Any]:
         print(f"[Tool: News Search(Naver)] Error: {e}")
         return {"status": "error", "query": query, "items": [], "message": str(e)}
 
-# 뉴스 검색 결과(dict 또는 문자열)에서 기사 URL 목록만 추출
+
 @tool
 def extract_urls_from_search_result(result: Union[str, Dict[str, Any]]) -> List[str]:
     urls: List[str] = []
@@ -196,13 +215,13 @@ def extract_urls_from_search_result(result: Union[str, Dict[str, Any]]) -> List[
             unique.append(u)
     return unique
 
-# 기사 본문 텍스트를 정리(불필요한 공백/줄바꿈 제거)
+
 def _clean_text(s: str) -> str:
     s = (s or "").strip()
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s
 
-# HTML의 JSON-LD(schema.org)에서 기사 메타데이터 추출
+
 def _extract_json_ld(soup: BeautifulSoup) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
@@ -233,7 +252,7 @@ def _extract_json_ld(soup: BeautifulSoup) -> Dict[str, Any]:
                     out["author"] = out.get("author") or author[0].get("name")
     return out
 
-# 네이버 뉴스 페이지 구조에 맞춰 제목/본문/언론사/날짜 파싱
+
 def _parse_naver_news(soup: BeautifulSoup) -> Dict[str, Any]:
     title = None
     for sel in ["h2#title_area", "h2.media_end_head_headline"]:
@@ -257,7 +276,7 @@ def _parse_naver_news(soup: BeautifulSoup) -> Dict[str, Any]:
 
     return {"title": title, "body": body, "publisher": publisher, "published_at": published_at}
 
-# 뉴스 기사 URL에 직접 접속해 본문·메타데이터를 추출하는 핵심 크롤링 tool
+
 @tool
 def fetch_article_from_url(url: str) -> Dict[str, Any]:
     print(f"\n[Tool: Fetch Article] URL: {url}")
@@ -332,7 +351,7 @@ def fetch_article_from_url(url: str) -> Dict[str, Any]:
             "error": str(e),
         }
 
-# 사용자 입력(회사명/종목코드)을 stock_code / corp_code로 정규화
+
 @tool
 def resolve_ticker(user_input: str, config: RunnableConfig) -> Dict[str, Any]:
     print(f"\n[Tool: Resolve Ticker] Input: {user_input}")
@@ -351,7 +370,7 @@ def resolve_ticker(user_input: str, config: RunnableConfig) -> Dict[str, Any]:
         print(f"[Tool: Resolve Ticker] Error: {e}")
         return {"status": "error", "message": str(e)}
 
-# DART API를 호출해 특정 기업의 재무제표(주요 계정)를 조회
+
 @tool
 def get_financial_statement(
     corp_code: str,
@@ -414,7 +433,7 @@ def get_financial_statement(
             "report_type": report_type,
         }
 
-# DART에서 내려오는 숫자 문자열을 안전하게 int로 변환
+
 def _to_int_safe(v: Any) -> Optional[int]:
     if v is None:
         return None
@@ -429,7 +448,7 @@ def _to_int_safe(v: Any) -> Optional[int]:
     except Exception:
         return None
 
-# 재무제표 전체 계정 중 답변에 자주 쓰는 핵심 지표만 추려서 정규화
+
 def _normalize_key_accounts(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "revenue": None,
@@ -470,6 +489,8 @@ def _normalize_key_accounts(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             result["total_equity"] = amount
 
     return result
+
+
 
 @tool
 def get_portfolio_stocks(user_id: str, config: RunnableConfig) -> Dict[str, Any]:
