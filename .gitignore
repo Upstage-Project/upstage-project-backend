@@ -145,6 +145,8 @@ env.bak/
 venv.bak/
 .env.*
 !.env.example
+*firebase-adminsdk*.json
+
 
 # Spyder project settings
 .spyderproject
