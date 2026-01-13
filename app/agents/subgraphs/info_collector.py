@@ -28,7 +28,12 @@ from app.core.db import engine
 # -------------------------
 FIN_KEYWORDS = ["실적", "매출", "영업이익", "순이익", "재무", "재무제표", "손익", "자산", "부채", "자본", "ROE", "PER", "PBR"]
 PF_KEYWORDS = ["포트폴리오", "보유", "내 종목", "내 주식", "내가 가진", "내가 보유한"]
+TERM_KEYWORDS = ["뜻", "정의", "설명", "뭐야", "이란", "란", "용어", "개념", "what is", "meaning", "define"]
 
+
+def _wants_term(user_query: str) -> bool:
+    q = (user_query or "").strip().lower()
+    return any(k.lower() in q for k in TERM_KEYWORDS)
 
 def _wants_portfolio(user_query: str) -> bool:
     q = (user_query or "").lower()
@@ -123,6 +128,18 @@ def plan_next_action(state: InfoCollectorAgentState):
         return {"collected": collected, "messages": [AIMessage(content="END")]}
 
     user_query = _get_user_query(messages)
+    # ✅ (NEW) 용어 질문이면: 수집 스킵 → Agent3로 라우팅
+    if _wants_term(user_query):
+        collected["route"] = "term"          # Agent3가 term 모드로 응답 생성
+        collected["skip_collect"] = True     # 디버깅/가독성용(선택)
+        # collected["term_query"] = user_query  # 필요하면 남겨도 됨(선택)
+
+        log_agent_step(
+            "InvestmentInfoCollector",
+            "Plan: term detected -> skip collecting, route to agent3",
+            {"query": user_query}
+        )
+        return {"collected": collected, "messages": [AIMessage(content="END")]}
 
     # (A) 포트폴리오 모드 확인
     if _wants_portfolio(user_query):
@@ -254,7 +271,6 @@ def plan_next_action(state: InfoCollectorAgentState):
     # 7) 끝
     log_agent_step("InvestmentInfoCollector", "Plan: end", {"phase": collected.get("phase")})
     return {"collected": collected, "messages": [AIMessage(content="END")]}
-
 
 # -------------------------
 # 2) Tool 결과 누적 (Accumulate)

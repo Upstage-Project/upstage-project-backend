@@ -65,17 +65,3 @@ def get_ticker_resolver() -> TickerResolver:
             _ticker_resolver_singleton.ensure_loaded()
     return _ticker_resolver_singleton
 
-
-# =========================
-# Agent Services
-# =========================
-from app.service.agents.info_collector_service import InfoCollectorService
-
-
-def get_info_collector_service() -> InfoCollectorService:
-    """
-    InfoCollectorService DI
-    - 현재는 stateless지만
-    - 추후 repo/service 의존성 생겨도 확장 가능
-    """
-    return InfoCollectorService()
