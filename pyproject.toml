@@ -25,4 +25,5 @@ dependencies = [
     "streamlit",
     "pandas",
     "gdown",
+    "psycopg2-binary>=2.9.11",
 ]

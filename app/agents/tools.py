@@ -1,4 +1,5 @@
 # app/agents/tools.py
+
 from typing import Optional, Dict, Any, List, Literal, Union
 import os
 import re
@@ -17,6 +18,10 @@ from app.service.vector_service import VectorService
 
 from sqlalchemy import text
 
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_upstage import ChatUpstage
+
 embedding_fn = get_upstage_embeddings()
 solar_chat = get_solar_chat()
 
@@ -31,23 +36,45 @@ REPRT_CODE_MAP = {
     "FY": "11011",
 }
 
-# HTML 태그와 엔티티를 제거해서 뉴스 제목/요약을 사람이 읽기 좋은 텍스트로 정리
+@tool
+def search_invest_kb(query: str, config: RunnableConfig) -> str:
+    """사용자 질문과 관련된 투자/기업 정보를 내부 KB(VectorDB)에서 검색합니다."""
+    print(f"\n[Tool: Internal KB Search] Query: {query}")
+    try:
+        vector_service: VectorService = config["configurable"].get("vector_service")
+        if not vector_service:
+            return "Error: VectorService not found in config"
+        docs = vector_service.search(query, n_results=5)
+        print(f"[Tool: Internal KB Search] Found {len(docs)} documents.")
+
+        context_parts = []
+        for i, d in enumerate(docs):
+            content_preview = d.page_content[:100].replace('\n', ' ') if d.page_content else ""
+            print(f" - Document {i + 1}: {content_preview}...")
+        return "\n\n".join(context_parts)
+    except Exception as e:
+        print(f"[Tool: Internal KB Search] Error: {e}")
+        return f"Search Error: {e}"
+
 def clean_html(text: str) -> str:
     text = html.unescape(text or "")
     text = re.sub(r"<[^>]+>", "", text)
     return text.strip()
 
-# URL을 SHA256 해시로 변환해 뉴스/기사의 고유 ID 생성
+
 def make_id(url: str) -> str:
     return hashlib.sha256((url or "").encode("utf-8")).hexdigest()
 
-# 단일 뉴스/기사/재무 정보를 VectorDB에 1건 저장
+
 @tool
 def add_to_invest_kb(
     content: str,
     config: RunnableConfig,
     metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
+    """
+    단일 텍스트 콘텐츠를 메타데이터와 함께 투자 KB(VectorDB)에 저장합니다.
+    """
     print(f"\n[Tool: Add Knowledge] Adding content to KB...")
     print(f" - Content snippet: {content[:100]}...")
 
@@ -67,7 +94,7 @@ def add_to_invest_kb(
         print(f"[Tool: Add Knowledge] Error: {e}")
         return {"status": "error", "message": str(e), "metadata": metadata or {}}
 
-# 여러 뉴스/기사/재무 문서를 한 번의 tool call로 VectorDB에 배치 저장
+
 @tool
 def add_many_to_invest_kb(
     contents: List[str],
@@ -76,7 +103,7 @@ def add_many_to_invest_kb(
 ) -> Dict[str, Any]:
     """
     여러 문서를 한 번에 KB(VectorDB)에 저장합니다.
-    - 1턴 1툴 규칙에서, 뉴스/기사/재무를 모아 "한 번의 tool call"로 저장하기 위함.
+    뉴스 기사, 재무제표 등 다수의 문서를 배치로 저장할 때 사용합니다.
     """
     print(f"\n[Tool: Add Many Knowledge] Adding {len(contents)} docs to KB...")
 
@@ -120,7 +147,7 @@ def add_many_to_invest_kb(
         print(f"[Tool: Add Many Knowledge] Error: {e}")
         return {"status": "error", "message": str(e), "saved": 0}
 
-# 네이버 뉴스 검색 API를 호출해 원시 뉴스 리스트(dict) 반환
+
 def search_naver_news(topic: str, max_results: int = 20, sort: str = "date") -> List[Dict[str, Any]]:
     client_id = os.getenv("NAVER_CLIENT_ID")
     client_secret = os.getenv("NAVER_CLIENT_SECRET")
@@ -157,12 +184,15 @@ def search_naver_news(topic: str, max_results: int = 20, sort: str = "date") -> 
         })
     return results
 
-# 네이버 뉴스 검색 결과를 표준화된 {status, items} 구조로 반환하는 LLM용 tool
+
 @tool
 def search_news(query: str) -> Dict[str, Any]:
+    """
+    주어진 검색어(query)로 네이버 뉴스 API를 통해 최신 뉴스 목록을 검색합니다.
+    """
     print(f"\n[Tool: News Search(Naver)] Query: {query}")
     try:
-        items = search_naver_news(query, max_results=10, sort="date")
+        items = search_naver_news(query, max_results=50, sort="date")
         if not items:
             return {"status": "not_found", "query": query, "items": [], "message": "No news results found."}
         return {"status": "success", "query": query, "items": items}
@@ -170,9 +200,12 @@ def search_news(query: str) -> Dict[str, Any]:
         print(f"[Tool: News Search(Naver)] Error: {e}")
         return {"status": "error", "query": query, "items": [], "message": str(e)}
 
-# 뉴스 검색 결과(dict 또는 문자열)에서 기사 URL 목록만 추출
+
 @tool
 def extract_urls_from_search_result(result: Union[str, Dict[str, Any]]) -> List[str]:
+    """
+    뉴스 검색 결과(JSON 또는 텍스트)에서 URL 리스트만 추출합니다.
+    """
     urls: List[str] = []
 
     if isinstance(result, dict):
@@ -196,13 +229,13 @@ def extract_urls_from_search_result(result: Union[str, Dict[str, Any]]) -> List[
             unique.append(u)
     return unique
 
-# 기사 본문 텍스트를 정리(불필요한 공백/줄바꿈 제거)
+
 def _clean_text(s: str) -> str:
     s = (s or "").strip()
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s
 
-# HTML의 JSON-LD(schema.org)에서 기사 메타데이터 추출
+
 def _extract_json_ld(soup: BeautifulSoup) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
@@ -233,7 +266,7 @@ def _extract_json_ld(soup: BeautifulSoup) -> Dict[str, Any]:
                     out["author"] = out.get("author") or author[0].get("name")
     return out
 
-# 네이버 뉴스 페이지 구조에 맞춰 제목/본문/언론사/날짜 파싱
+
 def _parse_naver_news(soup: BeautifulSoup) -> Dict[str, Any]:
     title = None
     for sel in ["h2#title_area", "h2.media_end_head_headline"]:
@@ -257,9 +290,12 @@ def _parse_naver_news(soup: BeautifulSoup) -> Dict[str, Any]:
 
     return {"title": title, "body": body, "publisher": publisher, "published_at": published_at}
 
-# 뉴스 기사 URL에 직접 접속해 본문·메타데이터를 추출하는 핵심 크롤링 tool
+
 @tool
 def fetch_article_from_url(url: str) -> Dict[str, Any]:
+    """
+    주어진 URL에 접속하여 뉴스 기사의 본문, 제목, 게시일 등을 크롤링하여 가져옵니다.
+    """
     print(f"\n[Tool: Fetch Article] URL: {url}")
     collected_at = datetime.now().isoformat()
 
@@ -332,9 +368,12 @@ def fetch_article_from_url(url: str) -> Dict[str, Any]:
             "error": str(e),
         }
 
-# 사용자 입력(회사명/종목코드)을 stock_code / corp_code로 정규화
+
 @tool
 def resolve_ticker(user_input: str, config: RunnableConfig) -> Dict[str, Any]:
+    """
+    사용자의 입력(회사명 또는 종목코드)을 바탕으로 정확한 회사 정보(Ticker, Corp Code 등)를 찾습니다.
+    """
     print(f"\n[Tool: Resolve Ticker] Input: {user_input}")
 
     resolver = config["configurable"].get("ticker_resolver")
@@ -351,7 +390,7 @@ def resolve_ticker(user_input: str, config: RunnableConfig) -> Dict[str, Any]:
         print(f"[Tool: Resolve Ticker] Error: {e}")
         return {"status": "error", "message": str(e)}
 
-# DART API를 호출해 특정 기업의 재무제표(주요 계정)를 조회
+
 @tool
 def get_financial_statement(
     corp_code: str,
@@ -359,6 +398,9 @@ def get_financial_statement(
     report_type: ReportType,
     config: RunnableConfig,
 ) -> Dict[str, Any]:
+    """
+    DART API를 사용하여 특정 기업(corp_code)의 재무제표 정보를 가져옵니다.
+    """
     print(f"\n[Tool: DART Financials] corp_code={corp_code}, year={bsns_year}, report={report_type}")
 
     dart_api_key = config["configurable"].get("dart_api_key") or os.getenv("DART_API_KEY")
@@ -414,7 +456,7 @@ def get_financial_statement(
             "report_type": report_type,
         }
 
-# DART에서 내려오는 숫자 문자열을 안전하게 int로 변환
+
 def _to_int_safe(v: Any) -> Optional[int]:
     if v is None:
         return None
@@ -429,7 +471,7 @@ def _to_int_safe(v: Any) -> Optional[int]:
     except Exception:
         return None
 
-# 재무제표 전체 계정 중 답변에 자주 쓰는 핵심 지표만 추려서 정규화
+
 def _normalize_key_accounts(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "revenue": None,
@@ -471,8 +513,13 @@ def _normalize_key_accounts(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     return result
 
+
+
 @tool
 def get_portfolio_stocks(user_id: str, config: RunnableConfig) -> Dict[str, Any]:
+    """
+    특정 사용자의 포트폴리오에 등록된 주식 종목 리스트를 DB에서 조회합니다.
+    """
     engine = config["configurable"].get("db_engine")
     if not engine:
         return {"status": "error", "user_id": user_id, "count": 0, "holdings": [], "error": "db_engine not found"}
@@ -505,3 +552,81 @@ def get_portfolio_stocks(user_id: str, config: RunnableConfig) -> Dict[str, Any]
         return {"status": "success", "user_id": user_id, "count": len(holdings), "holdings": holdings, "error": None}
     except Exception as e:
         return {"status": "error", "user_id": user_id, "count": 0, "holdings": [], "error": str(e)}
+
+
+@tool
+def analyze_stock_info(stock_name: str, context_query: str, config: RunnableConfig) -> str:
+    """
+    특정 종목에 대해 VectorDB를 조회한 후, Solar LLM을 사용하여 전문적인 투자 분석 리포트를 작성합니다.
+    반환값은 Markdown 형식의 텍스트 리포트입니다.
+
+    Args:
+        stock_name: 분석할 종목명 (예: 삼성전자)
+        context_query: DB 검색 정확도를 높이기 위한 쿼리 (예: 삼성전자 최근 실적 및 주요 뉴스)
+    """
+    print(f"\n[Tool: Analyze Stock Info] Target: {stock_name}")
+
+    # 1. VectorDB 조회 (RAG)
+    try:
+        vector_service = config["configurable"].get("vector_service")
+        if not vector_service:
+            return "Error: VectorService not found in config"
+
+        # 분석을 위해 문서를 넉넉하게(7개) 가져옵니다.
+        docs = vector_service.search(context_query, n_results=7)
+
+        if not docs:
+            return f"'{stock_name}'에 대한 분석 가능한 데이터가 내부 DB에 없습니다."
+
+        # 문서 내용을 하나의 텍스트로 합침
+        context_text = "\n\n".join([d.page_content for d in docs])
+
+    except Exception as e:
+        return f"데이터 조회 중 오류 발생: {e}"
+
+    # 2. 분석용 LLM 설정 (Upstage Solar Pro 사용)
+    # .env 파일에 UPSTAGE_API_KEY 설정이 되어 있어야 합니다.
+    # 분석의 일관성을 위해 temperature=0으로 설정합니다.
+    llm = ChatUpstage(model="solar-pro", temperature=0)
+
+    # 3. 분석 프롬프트 (Analyst Persona)
+    prompt = PromptTemplate.from_template("""
+    당신은 20년 경력의 냉철한 주식 애널리스트입니다. 
+    아래 [Context]는 '{stock_name}'와 관련하여 내부 데이터베이스에서 수집된 최신 정보입니다.
+
+    이를 바탕으로 투자자를 위한 **투자 분석 리포트**를 작성하세요.
+
+    [Context - 수집된 정보]
+    {context}
+
+    [Reporting Format]
+    ---
+    ### 1. 🏢 종목명: {stock_name}
+
+    #### 📰 주요 뉴스 및 이슈 체크
+    - **핵심 요약:** (가장 중요한 이슈 3가지 이내 요약)
+    - **시장 반응:** (긍정 / 부정 / 중립)
+    - **상세 근거:** (뉴스 내용의 팩트와 수치를 인용하여 설명)
+    - **출처:** (기사 제목이나 날짜가 있다면 명시)
+
+    #### 📊 펀더멘털 분석 (재무 정보 존재 시)
+    - **실적 추이:** (매출, 영업이익 등 재무 지표 변화)
+    - **재무 평가:** (성장성, 수익성 관점의 평가)
+    - **평가 이유:** (평가 근거)
+
+    * 주의사항:
+    1. Context에 없는 내용은 "정보 없음"으로 표기하고 절대 지어내지 마시오(No Hallucination).
+    2. 출력은 반드시 Markdown 형식을 준수하시오.
+    """)
+
+    # 4. Chain 실행
+    chain = prompt | llm | StrOutputParser()
+
+    try:
+        result = chain.invoke({
+            "stock_name": stock_name,
+            "context": context_text
+        })
+        return result
+    except Exception as e:
+        return f"리포트 생성 중 오류 발생: {e}"

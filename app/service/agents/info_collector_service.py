@@ -12,59 +12,51 @@ class InfoCollectorService:
     def run(
         self,
         user_query: str,
+        user_id: Optional[str] = None,  # ✅ 추가
         build_logs: Optional[List[BaseMessage]] = None,
         config: Optional[RunnableConfig] = None,
         history: Optional[List[BaseMessage]] = None,
     ) -> Dict[str, Any]:
         """
         InfoCollector 서브그래프 실행 서비스.
-
-        - user_query: 사용자의 원 질문
-        - history: 이전 대화 히스토리(있으면 messages에 그대로 붙임)
-        - build_logs: 이전 에이전트(또는 상위 오케스트레이터)의 로그/요약(있으면 참고 컨텍스트로 제공)
-        - config: Tool 의존성 주입용
-          (예: vector_service, ticker_resolver, dart_api_key 등은 config["configurable"] 아래에 들어가야 함)
+        - config["configurable"]로 tool 의존성 주입 (vector_service, ticker_resolver, db_engine, dart_api_key 등)
         """
 
-        # 1) Handoff 메시지 구성
-        #    - info_collector.py의 instruction_info_collect에 맞춰, Collector가 해야 할 순서를 명확히 안내
+        # ✅ 실제 그래프/tools 기능과 일치하도록 정리 (search_invest_kb 언급 제거)
         handoff_msg = (
             f'Original User Query: "{user_query}"\n\n'
             "You are InfoCollectorAgent (InvestmentInfoCollector).\n"
             "Follow this order:\n"
-            "1) Resolve the company first if needed (resolve_ticker).\n"
-            "2) Search internal KB first (search_invest_kb).\n"
-            "3) If insufficient, fetch external info:\n"
-            "   - News: search_news\n"
-            "   - Financials: get_financial_statement (DART)\n"
-            "4) Optionally save useful external summaries (add_to_invest_kb).\n\n"
+            "1) If portfolio-related, load portfolio stocks first (get_portfolio_stocks).\n"
+            "2) Resolve the company if needed (resolve_ticker).\n"
+            "3) Fetch external info:\n"
+            "   - News: search_news → extract_urls → fetch_article\n"
+            "   - Financials: get_financial_statement (DART) if requested\n"
+            "4) Save useful snippets/articles/financials to KB (add_many_to_invest_kb).\n\n"
             "Rules:\n"
             "- Use at most ONE tool call per turn.\n"
-            "- Keep evidence (dates/sources) where possible.\n"
         )
 
-        # 2) build_logs가 있으면 "이전 컨텍스트"로 추가
-        #    - build_logs[-1].content를 그대로 붙이되, 길면 너무 커질 수 있으니 필요 시 자르는 것도 고려 가능
         if build_logs:
             last_context = build_logs[-1].content if build_logs[-1].content else ""
             handoff_msg += f"\nPrevious context:\n{last_context}"
 
-        # 3) 메시지 구성: history(있으면) + 새 HumanMessage(handoff)
         messages: List[BaseMessage] = []
         if history:
             messages.extend(history)
 
         messages.append(HumanMessage(content=handoff_msg))
 
-        # 4) 그래프 실행
-        #    - info_collect_graph는 state={"messages": [...]} 형태를 기대
+        # ✅ state에 user_id 넣기 (포트폴리오 질문이면 필수)
+        state: Dict[str, Any] = {"messages": messages}
+        if user_id:
+            state["user_id"] = user_id
+
         sub_result = info_collect_graph.invoke(
-            {"messages": messages},
+            state,
             config=config,
         )
 
-        # 5) 새로 생성된 AI 메시지만 추출해서 반환
-        #    - ToolMessage까지 보고 싶으면 여기에서 isinstance 조건을 확장하면 됨
         history_len = len(messages)
         new_messages = [
             msg
@@ -75,4 +67,5 @@ class InfoCollectorService:
         return {
             "extract_logs": new_messages,
             "process_status": "success",
+            "collected": sub_result.get("collected"),
         }

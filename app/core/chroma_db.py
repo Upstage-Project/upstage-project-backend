@@ -1,4 +1,4 @@
-# app/core/vector_db.py
+# app/core/chroma_db.py
 import os
 import chromadb
 from typing import Optional

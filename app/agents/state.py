@@ -10,6 +10,9 @@ from langgraph.graph.message import add_messages
 class InfoCollectorAgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
 
+    # ✅ 포트폴리오 모드에서 필요
+    user_id: str
+
     # ✅ 이번 턴에서 수집한 “구조화된 결과”를 담는 컨테이너
     collected: Dict[str, Any]
     # 예:
@@ -18,8 +21,9 @@ class InfoCollectorAgentState(TypedDict, total=False):
     #   "news": [{"title":..., "url":..., "published_at":..., "summary":...}, ...],
     #   "articles": [{"url":..., "title":..., "body":..., "publisher":..., "published_at":...}, ...],
     #   "financials": {"bsns_year": 2024, "report_type":"FY", "key_accounts": {...}},
-    #   "kb_saved": [{"dedup_key": "...", "status":"success", "metadata": {...}}, ...],
+    #   "kb_saved": [{"status":"success", "metadata": {...}}, ...],
     # }
+
 
 class InfoAnalysisAgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
@@ -27,6 +31,7 @@ class InfoAnalysisAgentState(TypedDict, total=False):
     # ✅ Collector가 넘겨준 데이터를 그대로 받아 분석에 사용
     collected: Dict[str, Any]
     analysis_result: Dict[str, Any]
+
 
 class AnswerGenAgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
