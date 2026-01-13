@@ -13,11 +13,18 @@ class Settings(BaseSettings):
     SERPER_API_KEY: str
     UPSTAGE_API_KEY: str
     DART_API_KEY: str
+    NAVER_CLIENT_ID: str
+    NAVER_CLIENT_SECRET: str
 
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
     DB_NAME: str = "upstage"
     DB_USER: str = "postgres"
     DB_PASSWORD: str = "postgres"
+
+    # ✅ [수정] 개별 DB 정보를 조합하여 DATABASE_URL 생성
+    @property
+    def DATABASE_URL(self) -> str:
+        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
 settings = Settings()

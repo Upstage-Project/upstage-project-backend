@@ -1,4 +1,5 @@
 # app/agents/tools.py
+
 from typing import Optional, Dict, Any, List, Literal, Union
 import os
 import re
@@ -33,7 +34,7 @@ REPRT_CODE_MAP = {
 
 @tool
 def search_invest_kb(query: str, config: RunnableConfig) -> str:
-    """ 사용자 질문과 관련된 투자/기업 정보를 내부 KB(VectorDB)에서 검색합니다. """
+    """사용자 질문과 관련된 투자/기업 정보를 내부 KB(VectorDB)에서 검색합니다."""
     print(f"\n[Tool: Internal KB Search] Query: {query}")
     try:
         vector_service: VectorService = config["configurable"].get("vector_service")
@@ -67,6 +68,9 @@ def add_to_invest_kb(
     config: RunnableConfig,
     metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
+    """
+    단일 텍스트 콘텐츠를 메타데이터와 함께 투자 KB(VectorDB)에 저장합니다.
+    """
     print(f"\n[Tool: Add Knowledge] Adding content to KB...")
     print(f" - Content snippet: {content[:100]}...")
 
@@ -95,7 +99,7 @@ def add_many_to_invest_kb(
 ) -> Dict[str, Any]:
     """
     여러 문서를 한 번에 KB(VectorDB)에 저장합니다.
-    - 1턴 1툴 규칙에서, 뉴스/기사/재무를 모아 "한 번의 tool call"로 저장하기 위함.
+    뉴스 기사, 재무제표 등 다수의 문서를 배치로 저장할 때 사용합니다.
     """
     print(f"\n[Tool: Add Many Knowledge] Adding {len(contents)} docs to KB...")
 
@@ -179,6 +183,9 @@ def search_naver_news(topic: str, max_results: int = 20, sort: str = "date") -> 
 
 @tool
 def search_news(query: str) -> Dict[str, Any]:
+    """
+    주어진 검색어(query)로 네이버 뉴스 API를 통해 최신 뉴스 목록을 검색합니다.
+    """
     print(f"\n[Tool: News Search(Naver)] Query: {query}")
     try:
         items = search_naver_news(query, max_results=10, sort="date")
@@ -192,6 +199,9 @@ def search_news(query: str) -> Dict[str, Any]:
 
 @tool
 def extract_urls_from_search_result(result: Union[str, Dict[str, Any]]) -> List[str]:
+    """
+    뉴스 검색 결과(JSON 또는 텍스트)에서 URL 리스트만 추출합니다.
+    """
     urls: List[str] = []
 
     if isinstance(result, dict):
@@ -279,6 +289,9 @@ def _parse_naver_news(soup: BeautifulSoup) -> Dict[str, Any]:
 
 @tool
 def fetch_article_from_url(url: str) -> Dict[str, Any]:
+    """
+    주어진 URL에 접속하여 뉴스 기사의 본문, 제목, 게시일 등을 크롤링하여 가져옵니다.
+    """
     print(f"\n[Tool: Fetch Article] URL: {url}")
     collected_at = datetime.now().isoformat()
 
@@ -354,6 +367,9 @@ def fetch_article_from_url(url: str) -> Dict[str, Any]:
 
 @tool
 def resolve_ticker(user_input: str, config: RunnableConfig) -> Dict[str, Any]:
+    """
+    사용자의 입력(회사명 또는 종목코드)을 바탕으로 정확한 회사 정보(Ticker, Corp Code 등)를 찾습니다.
+    """
     print(f"\n[Tool: Resolve Ticker] Input: {user_input}")
 
     resolver = config["configurable"].get("ticker_resolver")
@@ -378,6 +394,9 @@ def get_financial_statement(
     report_type: ReportType,
     config: RunnableConfig,
 ) -> Dict[str, Any]:
+    """
+    DART API를 사용하여 특정 기업(corp_code)의 재무제표 정보를 가져옵니다.
+    """
     print(f"\n[Tool: DART Financials] corp_code={corp_code}, year={bsns_year}, report={report_type}")
 
     dart_api_key = config["configurable"].get("dart_api_key") or os.getenv("DART_API_KEY")
@@ -494,6 +513,9 @@ def _normalize_key_accounts(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 @tool
 def get_portfolio_stocks(user_id: str, config: RunnableConfig) -> Dict[str, Any]:
+    """
+    특정 사용자의 포트폴리오에 등록된 주식 종목 리스트를 DB에서 조회합니다.
+    """
     engine = config["configurable"].get("db_engine")
     if not engine:
         return {"status": "error", "user_id": user_id, "count": 0, "holdings": [], "error": "db_engine not found"}
