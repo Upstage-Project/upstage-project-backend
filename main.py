@@ -36,5 +36,5 @@ def startup_event():
 # 라우터 등록
 app.include_router(auth_router)
 app.include_router(users_router)
-app.include_router(agent_router)      # [추가됨] 에이전트 관련 API (/agent)
+#app.include_router(agent_router)      # [추가됨] 에이전트 관련 API (/agent)
 app.include_router(user_stock_router) # [추가됨] 주식 포트폴리오 API (/user-stock)
