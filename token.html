@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <meta charset="utf-8" />
+  <body>
+    <button id="btn">Google 로그인 → ID Token 출력</button>
+    <pre id="out" style="white-space: pre-wrap; word-break: break-all;"></pre>
+
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+      import { getAuth, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+      const firebaseConfig = {
+        apiKey: "AIzaSyBvw1WKrcZ1_oy4o6sJ4PqFEU11FIkIVow",
+        authDomain: "upstage-project.firebaseapp.com",
+        projectId: "upstage-project",
+        storageBucket: "upstage-project.firebasestorage.app",
+        messagingSenderId: "4484391368",
+        appId: "1:4484391368:web:d607f4bf1f0f1ba32520fd"
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const provider = new GoogleAuthProvider();
+
+      document.getElementById("btn").onclick = async () => {
+        const cred = await signInWithPopup(auth, provider);
+        const token = await cred.user.getIdToken();
+        document.getElementById("out").textContent = token;
+        console.log("ID_TOKEN:", token);
+      };
+    </script>
+  </body>
+</html>
