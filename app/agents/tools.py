@@ -188,7 +188,7 @@ def search_news(query: str) -> Dict[str, Any]:
     """
     print(f"\n[Tool: News Search(Naver)] Query: {query}")
     try:
-        items = search_naver_news(query, max_results=10, sort="date")
+        items = search_naver_news(query, max_results=50, sort="date")
         if not items:
             return {"status": "not_found", "query": query, "items": [], "message": "No news results found."}
         return {"status": "success", "query": query, "items": items}

@@ -40,12 +40,33 @@ def _wants_financials(user_query: str) -> bool:
     return any(k.lower() in q for k in FIN_KEYWORDS)
 
 
-def _default_bsns_year() -> int:
-    # ✅ [수정] 1~3월에는 전년도 사업보고서(FY)가 미발행 상태이므로 전전년도 기준 조회
+# ✅ [신규] 현재 날짜 기준으로 가장 최신 보고서(연도, 타입)를 계산하는 함수
+def _get_latest_report_params() -> Dict[str, Any]:
     now = datetime.now()
-    if now.month < 4:
-        return now.year - 2
-    return now.year - 1
+    year = now.year
+    month = now.month
+    day = now.day
+
+    # DART 제출 기한을 보수적으로 적용하여 타겟 설정
+    if month < 4:
+        # 1월~3월: 작년 사업보고서(FY)도 아직 안 나옴 -> 작년 3분기(Q3)가 최신
+        return {"bsns_year": year - 1, "report_type": "Q3"}
+
+    elif month == 4 or (month == 5 and day <= 15):
+        # 4월 ~ 5월 15일: 작년 사업보고서(FY) 확정됨
+        return {"bsns_year": year - 1, "report_type": "FY"}
+
+    elif month < 8 or (month == 8 and day <= 14):
+        # 5월 16일 ~ 8월 14일: 올해 1분기 보고서(Q1) 확정됨
+        return {"bsns_year": year, "report_type": "Q1"}
+
+    elif month < 11 or (month == 11 and day <= 14):
+        # 8월 15일 ~ 11월 14일: 올해 반기 보고서(H1) 확정됨
+        return {"bsns_year": year, "report_type": "H1"}
+
+    else:
+        # 11월 15일 ~ 12월: 올해 3분기 보고서(Q3) 확정됨
+        return {"bsns_year": year, "report_type": "Q3"}
 
 
 def _tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -188,7 +209,7 @@ def plan_next_action(state: InfoCollectorAgentState):
     articles: List[Dict[str, Any]] = collected.get("articles") or []
 
     # 기사 2개까지만 수집 (테스트용)
-    if len(articles) < 2 and idx < len(urls):
+    if len(articles) < 20 and idx < len(urls):
         url = urls[idx]
         log_agent_step("InvestmentInfoCollector", "Plan: fetch_article_from_url", {"url": url, "idx": idx})
         msg = AIMessage(
@@ -200,13 +221,21 @@ def plan_next_action(state: InfoCollectorAgentState):
     # 5) 재무정보
     if _wants_financials(user_query) and collected.get("financials") is None:
         corp_code = company.get("corp_code")
-        bsns_year = _default_bsns_year()  # ✅ 수정된 연도 계산 함수 사용
+        # ✅ [수정] 가장 최근 보고서 파라미터 계산
+        target_params = _get_latest_report_params()
+        bsns_year = target_params["bsns_year"]
+        report_type = target_params["report_type"]
+
         log_agent_step("InvestmentInfoCollector", "Plan: get_financial_statement",
-                       {"corp_code": corp_code, "bsns_year": bsns_year})
+                       {"corp_code": corp_code, "target": target_params})
+
         msg = AIMessage(
-            content="Fetching financial statement...",
-            tool_calls=[_tool_call("get_financial_statement",
-                                   {"corp_code": corp_code, "bsns_year": bsns_year, "report_type": "FY"})],
+            content=f"Fetching financial statement ({bsns_year} {report_type})...",
+            tool_calls=[_tool_call("get_financial_statement", {
+                "corp_code": corp_code,
+                "bsns_year": bsns_year,
+                "report_type": report_type
+            })],
         )
         return {"collected": collected, "messages": [msg]}
 
