@@ -1,27 +1,17 @@
 # app/deps.py
-from fastapi.params import Depends
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.core.firebase import verify_firebase_token
 
-from app.repository.vector.vector_repo import (
-    VectorRepository,
-    ChromaDBRepository,
-)
-from app.service.vector_service import VectorService
-from app.service.embedding_service import EmbeddingService
+security = HTTPBearer(auto_error=False)
 
+def get_current_claims(
+    cred: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
+    if not cred or not cred.credentials:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
 
-def get_vector_repository() -> VectorRepository:
-    return ChromaDBRepository()
-
-
-def get_embedding_service() -> EmbeddingService:
-    return EmbeddingService()
-
-
-def get_vector_service(
-    vector_repo: VectorRepository = Depends(get_vector_repository),
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
-) -> VectorService:
-    return VectorService(
-        vector_repository=vector_repo,
-        embedding_service=embedding_service,
-    )
+    try:
+        return verify_firebase_token(cred.credentials)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")

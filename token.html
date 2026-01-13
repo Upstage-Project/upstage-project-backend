@@ -1,33 +1,40 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
-  <meta charset="utf-8" />
-  <body>
-    <button id="btn">Google 로그인 → ID Token 출력</button>
-    <pre id="out" style="white-space: pre-wrap; word-break: break-all;"></pre>
+<head>
+  <meta charset="UTF-8" />
+  <title>Firebase Token Test</title>
 
-    <script type="module">
-      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-      import { getAuth, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  <!-- Firebase v8 (간단해서 추천) -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+</head>
+<body>
+  <button onclick="login()">Google Login</button>
 
-      const firebaseConfig = {
-        apiKey: "AIzaSyBvw1WKrcZ1_oy4o6sJ4PqFEU11FIkIVow",
-        authDomain: "upstage-project.firebaseapp.com",
-        projectId: "upstage-project",
-        storageBucket: "upstage-project.firebasestorage.app",
-        messagingSenderId: "4484391368",
-        appId: "1:4484391368:web:d607f4bf1f0f1ba32520fd"
-      };
+  <pre id="out"></pre>
 
-      const app = initializeApp(firebaseConfig);
-      const auth = getAuth(app);
-      const provider = new GoogleAuthProvider();
+  <script>
+    const firebaseConfig = {
+      apiKey: "🔥 너 Firebase 웹 apiKey 🔥",
+      authDomain: "upstage-project.firebaseapp.com",
+      projectId: "upstage-project",
+    };
 
-      document.getElementById("btn").onclick = async () => {
-        const cred = await signInWithPopup(auth, provider);
-        const token = await cred.user.getIdToken();
-        document.getElementById("out").textContent = token;
-        console.log("ID_TOKEN:", token);
-      };
-    </script>
-  </body>
+    firebase.initializeApp(firebaseConfig);
+
+    async function login() {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      provider.addScope("email"); // ⭐ 중요
+
+      const result = await firebase.auth().signInWithPopup(provider);
+      const user = result.user;
+
+      const token = await user.getIdToken(true);
+
+      document.getElementById("out").innerText = token;
+      console.log("ID_TOKEN:", token);
+      console.log("EMAIL:", user.email);
+    }
+  </script>
+</body>
 </html>
