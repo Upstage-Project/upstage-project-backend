@@ -54,7 +54,7 @@ def run_test():
             "dart_api_key": os.getenv("DART_API_KEY"),  # 명시적으로 넣어줌
         },
         # LangGraph 재귀 한도 늘리기 (필요 시)
-        "recursion_limit": 50
+        "recursion_limit": 150
     }
 
     try:

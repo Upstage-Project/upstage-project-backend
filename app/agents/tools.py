@@ -18,6 +18,10 @@ from app.service.vector_service import VectorService
 
 from sqlalchemy import text
 
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_upstage import ChatUpstage
+
 embedding_fn = get_upstage_embeddings()
 solar_chat = get_solar_chat()
 
@@ -45,9 +49,9 @@ def search_invest_kb(query: str, config: RunnableConfig) -> str:
 
         context_parts = []
         for i, d in enumerate(docs):
-            print(f" - Document {i + 1}: {d.document[:100]}...")
-            context_parts.append(f"Source {i + 1} (Metadata: {d.metadata}):\n{d.document}" )
-            return "\n\n".join(context_parts)
+            content_preview = d.page_content[:100].replace('\n', ' ') if d.page_content else ""
+            print(f" - Document {i + 1}: {content_preview}...")
+        return "\n\n".join(context_parts)
     except Exception as e:
         print(f"[Tool: Internal KB Search] Error: {e}")
         return f"Search Error: {e}"
@@ -548,3 +552,81 @@ def get_portfolio_stocks(user_id: str, config: RunnableConfig) -> Dict[str, Any]
         return {"status": "success", "user_id": user_id, "count": len(holdings), "holdings": holdings, "error": None}
     except Exception as e:
         return {"status": "error", "user_id": user_id, "count": 0, "holdings": [], "error": str(e)}
+
+
+@tool
+def analyze_stock_info(stock_name: str, context_query: str, config: RunnableConfig) -> str:
+    """
+    특정 종목에 대해 VectorDB를 조회한 후, Solar LLM을 사용하여 전문적인 투자 분석 리포트를 작성합니다.
+    반환값은 Markdown 형식의 텍스트 리포트입니다.
+
+    Args:
+        stock_name: 분석할 종목명 (예: 삼성전자)
+        context_query: DB 검색 정확도를 높이기 위한 쿼리 (예: 삼성전자 최근 실적 및 주요 뉴스)
+    """
+    print(f"\n[Tool: Analyze Stock Info] Target: {stock_name}")
+
+    # 1. VectorDB 조회 (RAG)
+    try:
+        vector_service = config["configurable"].get("vector_service")
+        if not vector_service:
+            return "Error: VectorService not found in config"
+
+        # 분석을 위해 문서를 넉넉하게(7개) 가져옵니다.
+        docs = vector_service.search(context_query, n_results=7)
+
+        if not docs:
+            return f"'{stock_name}'에 대한 분석 가능한 데이터가 내부 DB에 없습니다."
+
+        # 문서 내용을 하나의 텍스트로 합침
+        context_text = "\n\n".join([d.page_content for d in docs])
+
+    except Exception as e:
+        return f"데이터 조회 중 오류 발생: {e}"
+
+    # 2. 분석용 LLM 설정 (Upstage Solar Pro 사용)
+    # .env 파일에 UPSTAGE_API_KEY 설정이 되어 있어야 합니다.
+    # 분석의 일관성을 위해 temperature=0으로 설정합니다.
+    llm = ChatUpstage(model="solar-pro", temperature=0)
+
+    # 3. 분석 프롬프트 (Analyst Persona)
+    prompt = PromptTemplate.from_template("""
+    당신은 20년 경력의 냉철한 주식 애널리스트입니다. 
+    아래 [Context]는 '{stock_name}'와 관련하여 내부 데이터베이스에서 수집된 최신 정보입니다.
+
+    이를 바탕으로 투자자를 위한 **투자 분석 리포트**를 작성하세요.
+
+    [Context - 수집된 정보]
+    {context}
+
+    [Reporting Format]
+    ---
+    ### 1. 🏢 종목명: {stock_name}
+
+    #### 📰 주요 뉴스 및 이슈 체크
+    - **핵심 요약:** (가장 중요한 이슈 3가지 이내 요약)
+    - **시장 반응:** (긍정 / 부정 / 중립)
+    - **상세 근거:** (뉴스 내용의 팩트와 수치를 인용하여 설명)
+    - **출처:** (기사 제목이나 날짜가 있다면 명시)
+
+    #### 📊 펀더멘털 분석 (재무 정보 존재 시)
+    - **실적 추이:** (매출, 영업이익 등 재무 지표 변화)
+    - **재무 평가:** (성장성, 수익성 관점의 평가)
+    - **평가 이유:** (평가 근거)
+
+    * 주의사항:
+    1. Context에 없는 내용은 "정보 없음"으로 표기하고 절대 지어내지 마시오(No Hallucination).
+    2. 출력은 반드시 Markdown 형식을 준수하시오.
+    """)
+
+    # 4. Chain 실행
+    chain = prompt | llm | StrOutputParser()
+
+    try:
+        result = chain.invoke({
+            "stock_name": stock_name,
+            "context": context_text
+        })
+        return result
+    except Exception as e:
+        return f"리포트 생성 중 오류 발생: {e}"
