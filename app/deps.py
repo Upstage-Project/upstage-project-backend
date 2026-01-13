@@ -4,6 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.core.firebase import verify_firebase_token
 
 security = HTTPBearer(auto_error=False)
+<<<<<<< HEAD
 # =========================
 # DB
 # =========================
@@ -26,6 +27,8 @@ from app.repository.vector.vector_repo import (
     ChromaDBRepository,
 )
 
+=======
+>>>>>>> parent of 366dbab (Squashed commit of the following:)
 
 def get_current_claims(
     cred: HTTPAuthorizationCredentials = Depends(security),
@@ -37,6 +40,7 @@ def get_current_claims(
         return verify_firebase_token(cred.credentials)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
+<<<<<<< HEAD
 def get_vector_repository() -> VectorRepository:
     return ChromaDBRepository()
 
@@ -56,3 +60,5 @@ def get_info_collector_service() -> InfoCollectorService:
     - 추후 repo/service 의존성 생겨도 확장 가능
     """
     return InfoCollectorService()
+=======
+>>>>>>> parent of 366dbab (Squashed commit of the following:)
