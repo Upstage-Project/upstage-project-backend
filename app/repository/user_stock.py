@@ -1,45 +1,71 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from app.db.models import Stock  # __tablename__ = "stock" 가정
-from app.db.models import UserStock  # __tablename__ = "user_stock" 가정
-from typing import Optional
+
+# ✅ 너 프로젝트에 맞게 import 경로만 맞춰라
+from app.db.models import Stock, UserStock
 
 
-def get_all_user_stocks(db: Session, user_id: int):
-    """특정 유저가 등록한 모든 종목 정보(이름, 코드 등)를 가져옵니다."""
+def get_stock_by_identifier(db: Session, identifier: str) -> Stock | None:
+    """
+    identifier가 종목코드('005930')이든 종목명('삼성전자')이든 둘 다 찾게.
+    """
+    identifier = identifier.strip()
     return (
         db.query(Stock)
-        .join(UserStock)
-        .filter_by(user_id=user_id)  # 'UserStock.user_id == user_id' 대신 사용
+        .filter(or_(Stock.stock_id == identifier, Stock.stock_name == identifier))
+        .first()
+    )
+
+
+def search_stocks(db: Session, q: str, limit: int = 20) -> list[Stock]:
+    q = q.strip()
+    return (
+        db.query(Stock)
+        .filter(or_(Stock.stock_id.ilike(f"%{q}%"), Stock.stock_name.ilike(f"%{q}%")))
+        .order_by(Stock.stock_id.asc())
+        .limit(limit)
         .all()
     )
 
 
-def get_stock_by_identifier(db: Session, identifier: str) -> Optional[Stock]:
-    """stock 테이블에서 종목 코드나 이름으로 정보를 조회합니다."""
-    return db.query(Stock).filter(
-        or_(Stock.stock_id == identifier, Stock.stock_name == identifier)
-    ).first()
+def get_user_stock_item(db: Session, user_id: int, stock_id: str) -> UserStock | None:
+    """
+    user_stocks 테이블이 (user_id, stock_id) 복합 PK 라는 가정.
+    stock_id는 TEXT (ex: '005930')
+    """
+    return (
+        db.query(UserStock)
+        .filter(UserStock.user_id == user_id, UserStock.stock_id == stock_id)
+        .first()
+    )
 
 
 def add_stock_to_user(db: Session, user_id: int, stock_id: str) -> UserStock:
-    """user_stock 테이블에 새로운 행을 추가합니다."""
-    db_user_stock = UserStock(user_id=user_id, stock_id=stock_id)
-    db.add(db_user_stock)
+    item = UserStock(user_id=user_id, stock_id=stock_id)
+    db.add(item)
     db.commit()
-    db.refresh(db_user_stock)
-    return db_user_stock
+    db.refresh(item)
+    return item
 
 
-def get_user_stock_item(db: Session, user_id: int, stock_id: int) -> Optional[UserStock]:
-    """filter_by를 사용하여 타입 경고를 방지하고 가독성을 높입니다."""
-    return db.query(UserStock).filter_by(
-        user_id=user_id,
-        stock_id=stock_id
-    ).first()
+def delete_user_stock_item(db: Session, user_id: int, stock_id: str) -> None:
+    """
+    복합키 기반으로 바로 삭제 (조회 후 delete)
+    """
+    item = get_user_stock_item(db, user_id, stock_id)
+    if item:
+        db.delete(item)
+        db.commit()
 
 
-def delete_user_stock_item(db: Session, user_stock_item: UserStock):
-    """user_stock 테이블에서 해당 행을 삭제합니다."""
-    db.delete(user_stock_item)
-    db.commit()
+def get_all_user_stocks(db: Session, user_id: int) -> list[Stock]:
+    """
+    user_stocks에 등록된 stock_id들을 stocks와 조인해서 Stock 리스트로 반환
+    """
+    return (
+        db.query(Stock)
+        .join(UserStock, UserStock.stock_id == Stock.stock_id)
+        .filter(UserStock.user_id == user_id)
+        .order_by(Stock.stock_id.asc())
+        .all()
+    )

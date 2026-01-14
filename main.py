@@ -49,7 +49,8 @@ def startup_event():
 # =========================
 # Router registration
 # =========================
-app.include_router(auth_router)
-app.include_router(users_router)
-app.include_router(user_stock_router)
+app.include_router(auth_router, prefix="/api")
+app.include_router(users_router, prefix="/api")
+app.include_router(user_stock_router, prefix="/api")
+
 # app.include_router(agent_router)  # 에이전트 API 쓸 때만 활성화
