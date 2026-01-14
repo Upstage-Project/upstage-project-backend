@@ -91,3 +91,4 @@ def get_info_collector_service() -> InfoCollectorService:
     - 추후 repo/service 의존성 생겨도 확장 가능
     """
     return InfoCollectorService()
+

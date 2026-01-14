@@ -8,10 +8,16 @@ from app.db.base import Base
 class User(Base):
     __tablename__ = "users"
 
-    # BIGSERIAL/IDENTITY로 자동 증가 보장
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     firebase_uid: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+
+    # 멘토 이름 (예: "Warren Buffett", "Peter Lynch")
+    mentor: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="user selected investment mentor"
+    )
 
 
 class Stock(Base):
