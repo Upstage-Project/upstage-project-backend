@@ -21,6 +21,7 @@ from sqlalchemy import text
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_upstage import ChatUpstage
+from langchain_core.runnables import RunnableConfig
 
 embedding_fn = get_upstage_embeddings()
 solar_chat = get_solar_chat()
@@ -35,6 +36,124 @@ REPRT_CODE_MAP = {
     "Q3": "11014",
     "FY": "11011",
 }
+
+@tool("analyze_invest_query")
+def analyze_invest_query(user_query: str) -> Dict[str, Any]:
+    """
+    투자 관련 사용자 질의를 분석해서:
+    - query_type: "TERM" | "PORTFOLIO" | "COMPANY" | "OTHER"
+    - companies: [{name, raw_span, ticker_hint}, ...]
+    형태로 반환하는 툴.
+
+    info_collector에서:
+      - 첫 루프에서 이 툴을 호출해 질의 유형/기업 후보를 결정하고
+      - 이후 플로우를 결정하는 데 사용한다.
+    """
+    print(f"\n[Tool: analyze_invest_query] Input: {user_query!r}")
+
+    # 기본 LLM (필요하면 get_solar_chat()이나 config["planner_llm"]로 교체 가능)
+    try:
+        llm = ChatUpstage()  # UPSTAGE_API_KEY는 env에서 로딩
+    except Exception as e:
+        print(f"[Tool: analyze_invest_query] LLM init error: {e}")
+        return {
+            "status": "error",
+            "message": f"failed to init llm: {e}",
+            "query_type": "OTHER",
+            "companies": [],
+        }
+
+    system_prompt = """
+당신은 투자 도메인 질의 분석기입니다.
+사용자의 한국어/영어 질의를 보고 아래 정보를 JSON으로만 출력하세요.
+
+필수 출력 형식 (JSON):
+
+{
+  "query_type": "PORTFOLIO" | "COMPANY" | "OTHER",
+  "companies": [
+    {
+      "name": string,        // 사람이 읽는 회사명 (가능하면 깨끗하게)
+      "raw_span": string,    // 사용자 입력에서 해당 회사를 표현한 실제 문자열
+      "ticker_hint": string | null  // '005930', 'TSLA'처럼 명시적 티커/코드가 있으면, 없으면 null
+    }
+  ]
+}
+
+판단 기준:
+- "PORTFOLIO":
+    사용자의 보유 종목/포트폴리오 전체를 기준으로 정보를 묻는 질문
+    예) "내 포트폴리오 기준으로 요약해줘", "내가 가진 주식들 위험도 알려줘"
+- "COMPANY":
+    특정 기업에 대한 정보를 묻는 질문
+    예) "삼성전자 최근 실적 어때?", "NAVER 기업 정보 알려줘"
+- "OTHER":
+    위에 명확히 속하지 않는 일반 질문
+
+규칙:
+- 반드시 JSON만 출력하세요. JSON 앞뒤에 다른 설명 텍스트를 넣지 마세요.
+- companies는 query_type이 "COMPANY"인 경우에만 채우고, 아닐 때는 []로 두세요.
+- 확실하지 않은 회사명은 companies에 넣지 마세요.
+"""
+
+    user_prompt = f"사용자 질의: {user_query!r}\n위 규칙에 따라 JSON만 출력하세요."
+
+    try:
+        # ChatUpstage는 문자열 입력도 받으니 system + user를 하나로 합쳐서 보냄
+        full_prompt = system_prompt.strip() + "\n\n" + user_prompt
+        resp = llm.invoke(full_prompt)
+
+        # resp가 Message일 수도 있고, 그냥 str일 수도 있음 → content 우선 사용
+        raw = getattr(resp, "content", resp)
+        if not isinstance(raw, str):
+            raw = str(raw)
+
+        print(f"[Tool: analyze_invest_query] Raw LLM output: {raw}")
+
+        try:
+            data = json.loads(raw)
+        except Exception as e:
+            print(f"[Tool: analyze_invest_query] JSON parse error: {e}")
+            return {
+                "status": "error",
+                "message": f"json parse error: {e}",
+                "query_type": "OTHER",
+                "companies": [],
+            }
+
+        # 안전장치: query_type 정규화 + companies 기본값/형태 맞추기
+        qtype = (data.get("query_type") or "").upper()
+        if qtype not in ["TERM", "PORTFOLIO", "COMPANY", "OTHER"]:
+            qtype = "OTHER"
+
+        companies = data.get("companies") or []
+        norm_companies = []
+        if isinstance(companies, list):
+            for c in companies:
+                if not isinstance(c, dict):
+                    continue
+                norm_companies.append({
+                    "name": c.get("name"),
+                    "raw_span": c.get("raw_span"),
+                    "ticker_hint": c.get("ticker_hint"),
+                })
+
+        result = {
+            "status": "success",
+            "query_type": qtype,
+            "companies": norm_companies,
+        }
+        print(f"[Tool: analyze_invest_query] Parsed result: {result}")
+        return result
+
+    except Exception as e:
+        print(f"[Tool: analyze_invest_query] Error: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "query_type": "OTHER",
+            "companies": [],
+        }
 
 @tool
 def search_invest_kb(query: str, config: RunnableConfig) -> str:
@@ -157,7 +276,7 @@ def search_naver_news(topic: str, max_results: int = 20, sort: str = "date") -> 
         raise RuntimeError("NAVER_CLIENT_SECRET not set")
 
     headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}
-    params = {"query": topic, "display": min(max_results, 100), "start": 1, "sort": sort}
+    params = {"query": topic, "display": min(max_results, 20), "start": 1, "sort": sort}
 
     with httpx.Client(timeout=10.0) as client:
         resp = client.get(NAVER_NEWS_URL, headers=headers, params=params)

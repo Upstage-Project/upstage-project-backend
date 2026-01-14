@@ -19,25 +19,10 @@ from app.agents.tools import (
     fetch_article_from_url,
     get_financial_statement,
     add_many_to_invest_kb,
+    analyze_invest_query,
 )
 from app.core.logger import log_agent_step
 from app.core.db import engine
-
-# -------------------------
-# 0) 간단 휴리스틱
-# -------------------------
-FIN_KEYWORDS = ["실적", "매출", "영업이익", "순이익", "재무", "재무제표", "손익", "자산", "부채", "자본", "ROE", "PER", "PBR"]
-PF_KEYWORDS = ["포트폴리오", "보유", "내 종목", "내 주식", "내가 가진", "내가 보유한"]
-
-
-def _wants_portfolio(user_query: str) -> bool:
-    q = (user_query or "").lower()
-    return any(k.lower() in q for k in PF_KEYWORDS)
-
-
-def _wants_financials(user_query: str) -> bool:
-    q = (user_query or "").lower()
-    return any(k.lower() in q for k in FIN_KEYWORDS)
 
 
 # ✅ [신규] 현재 날짜 기준으로 가장 최신 보고서(연도, 타입)를 계산하는 함수
@@ -91,7 +76,7 @@ def _reset_company_scope(collected: Dict[str, Any]):
 
 
 # -------------------------
-# 1) Planner
+# 1) Planner    analyze_invest_query,
 # -------------------------
 def plan_next_action(state: InfoCollectorAgentState):
     messages = state.get("messages", [])
@@ -124,8 +109,19 @@ def plan_next_action(state: InfoCollectorAgentState):
 
     user_query = _get_user_query(messages)
 
-    # (A) 포트폴리오 모드 확인
-    if _wants_portfolio(user_query):
+    # ✅ 0) 아직 질의 분석이 안 되어 있으면 LLM 분석 툴 호출
+    if not collected.get("query_analysis_done"):
+        log_agent_step("InvestmentInfoCollector", "Plan: analyze_invest_query", {"user_query": user_query})
+        msg = AIMessage(
+            content="Analyzing user query...",
+            tool_calls=[_tool_call("analyze_invest_query", {"user_query": user_query})],
+        )
+        return {"collected": collected, "messages": [msg]}
+
+    # ✅ 1) 분석 결과 기반 분기
+    query_type = collected.get("query_type")
+
+    if query_type == "PORTFOLIO":
         collected["portfolio_mode"] = True
 
     # (B) 포트폴리오 로직
@@ -174,11 +170,26 @@ def plan_next_action(state: InfoCollectorAgentState):
     company = collected.get("company")
 
     # 1) 회사 식별
-    if not company:
-        log_agent_step("InvestmentInfoCollector", "Plan: resolve_ticker", {})
+    if not company and not collected.get("portfolio_mode"):
+        # COMPANY / OTHER 타입일 때만 시도 (PORTFOLIO는 포트폴리오 로직에서 처리)
+        candidates = collected.get("company_candidates") or []
+
+        if candidates:
+            # 일단 첫 번째 후보를 사용 (나중에 멀티기업 확장 가능)
+            first = candidates[0]
+            user_input_for_resolve = first.get("ticker_hint") or first.get("name") or first.get("raw_span")
+        else:
+            # 후보가 없으면 fallback: 전체 user_query
+            user_input_for_resolve = user_query
+
+        log_agent_step(
+            "InvestmentInfoCollector",
+            "Plan: resolve_ticker (from analysis)",
+            {"user_input": user_input_for_resolve},
+        )
         msg = AIMessage(
             content="Resolving company ticker...",
-            tool_calls=[_tool_call("resolve_ticker", {"user_input": user_query})],
+            tool_calls=[_tool_call("resolve_ticker", {"user_input": user_input_for_resolve})],
         )
         return {"collected": collected, "messages": [msg]}
 
@@ -219,25 +230,42 @@ def plan_next_action(state: InfoCollectorAgentState):
         return {"collected": collected, "messages": [msg]}
 
     # 5) 재무정보
-    if _wants_financials(user_query) and collected.get("financials") is None:
-        corp_code = company.get("corp_code")
-        # ✅ [수정] 가장 최근 보고서 파라미터 계산
-        target_params = _get_latest_report_params()
-        bsns_year = target_params["bsns_year"]
-        report_type = target_params["report_type"]
+    # corp_code 없는 경우에는 재무제표 수집을 시도하지 않고, 한 번만 스킵 표시 후 넘어간다.
+    if collected.get("financials") is None:
+        corp_code = (company or {}).get("corp_code")
 
-        log_agent_step("InvestmentInfoCollector", "Plan: get_financial_statement",
-                       {"corp_code": corp_code, "target": target_params})
+        if not corp_code:
+            # ✅ 재무제표 스킵 처리 (무한 루프 방지용)
+            log_agent_step(
+                "InvestmentInfoCollector",
+                "Skip get_financial_statement: corp_code missing",
+                {"company": company},
+            )
+            collected["financials"] = {
+                "status": "skipped",
+                "reason": "corp_code_missing",
+            }
+        else:
+            # ✅ corp_code 가 있는 경우에만 DART 호출
+            target_params = _get_latest_report_params()
+            bsns_year = target_params["bsns_year"]
+            report_type = target_params["report_type"]
 
-        msg = AIMessage(
-            content=f"Fetching financial statement ({bsns_year} {report_type})...",
-            tool_calls=[_tool_call("get_financial_statement", {
-                "corp_code": corp_code,
-                "bsns_year": bsns_year,
-                "report_type": report_type
-            })],
-        )
-        return {"collected": collected, "messages": [msg]}
+            log_agent_step(
+                "InvestmentInfoCollector",
+                "Plan: get_financial_statement",
+                {"corp_code": corp_code, "target": target_params},
+            )
+
+            msg = AIMessage(
+                content=f"Fetching financial statement ({bsns_year} {report_type})...",
+                tool_calls=[_tool_call("get_financial_statement", {
+                    "corp_code": corp_code,
+                    "bsns_year": bsns_year,
+                    "report_type": report_type
+                })],
+            )
+            return {"collected": collected, "messages": [msg]}
 
     # 6) KB 저장 큐 처리
     if collected.get("kb_save_queue"):
@@ -254,7 +282,6 @@ def plan_next_action(state: InfoCollectorAgentState):
     # 7) 끝
     log_agent_step("InvestmentInfoCollector", "Plan: end", {"phase": collected.get("phase")})
     return {"collected": collected, "messages": [AIMessage(content="END")]}
-
 
 # -------------------------
 # 2) Tool 결과 누적 (Accumulate)
@@ -288,7 +315,28 @@ def accumulate(state: InfoCollectorAgentState):
 
     log_agent_step("InvestmentInfoCollector", "Accumulate tool result", {"tool": tool_name})
 
-    if tool_name == "get_portfolio_stocks" and isinstance(content, dict):
+    # ✅ 새로 추가: analyze_invest_query 결과 처리
+    if tool_name == "analyze_invest_query" and isinstance(content, dict):
+        if content.get("status") == "success":
+            collected["query_analysis_done"] = True
+            qtype = (content.get("query_type") or "").upper()
+            if qtype not in ["TERM", "PORTFOLIO", "COMPANY", "OTHER"]:
+                qtype = "OTHER"
+            collected["query_type"] = qtype
+
+            # COMPANY 쿼리라면 LLM이 뽑은 기업 목록 저장
+            companies = content.get("companies") or []
+            collected["company_candidates"] = companies
+            collected["phase"] = "query_analyzed"
+        else:
+            # 분석 실패하면 그냥 OTHER로 두고, 이후 로직에서 user_query 그대로 사용
+            collected["query_analysis_done"] = True
+            collected["query_type"] = "OTHER"
+            collected["company_candidates"] = []
+            collected["errors"].append({"tool": "analyze_invest_query", "content": content})
+            collected["phase"] = "query_analysis_failed"
+
+    elif tool_name == "get_portfolio_stocks" and isinstance(content, dict):
         if content.get("status") == "success":
             collected["portfolio_holdings"] = content.get("holdings", [])
             collected["portfolio_loaded"] = True
@@ -434,15 +482,15 @@ def accumulate(state: InfoCollectorAgentState):
         idx = int(collected.get("portfolio_index") or 0)
         holdings = collected.get("portfolio_holdings") or []
 
-        wants_fin = _wants_financials(user_query)
-        done = False
-        if wants_fin:
-            done = collected.get("financials") is not None
-        else:
-            urls = collected.get("urls") or []
-            fetch_idx = int(collected.get("fetch_article_index") or 0)
-            articles = collected.get("articles") or []
-            done = (len(articles) >= 2) or (fetch_idx >= len(urls) and collected.get("urls") is not None)
+        # ✅ 항상 뉴스 + 재무제표를 둘 다 가져오는 기준으로 done 정의
+        urls = collected.get("urls") or []
+        fetch_idx = int(collected.get("fetch_article_index") or 0)
+        articles = collected.get("articles") or []
+
+        news_done = (len(articles) >= 10) or (fetch_idx >= len(urls) and collected.get("urls") is not None)
+        fin_done = collected.get("financials") is not None
+
+        done = news_done and fin_done
 
         if done and idx < len(holdings):
             company = collected.get("company") or {}
@@ -480,6 +528,7 @@ info_collect_tools = [
     fetch_article_from_url,
     get_financial_statement,
     add_many_to_invest_kb,
+    analyze_invest_query,
 ]
 
 workflow = StateGraph(InfoCollectorAgentState)
@@ -494,17 +543,3 @@ workflow.add_edge("accumulate", "plan_next_action")
 
 info_collect_graph = workflow.compile()
 
-result = info_collect_graph.invoke(
-    {
-        "messages": [HumanMessage(content="내 포트폴리오 기준으로 뉴스랑 재무제표 가져와줘")],
-        "collected": {},
-        "user_id": "u123",  # ✅ state에 user_id 넣기
-    },
-    config={
-        "configurable": {
-            "db_engine": engine,
-            "join_stock_master": True,
-            # vector_service, ticker_resolver 등도 필요하면 여기에 추가
-        }
-    }
-)
