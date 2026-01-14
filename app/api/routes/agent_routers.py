@@ -1,4 +1,3 @@
-# app/api/routes/agent_routers.py
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from app.core.logger import logger
@@ -10,10 +9,13 @@ from app.models import (
     ErrorStreamEvent
 )
 
-# [수정] imprt -> import
 from app.exceptions import AgentException, KnowledgeBaseException
 from app.deps import get_agent_service
 from app.service.agent_service import AgentService
+
+# 유저 인증 및 모델 의존성 추가
+from app.db.models import User
+from app.api.user_deps import get_current_user
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -26,7 +28,9 @@ async def health_check():
 # 일반채팅 (결과를 한 번에 기다렸다가 받는 전통적 API)
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
-        request: ChatRequest, agent_service: AgentService = Depends(get_agent_service)
+        request: ChatRequest,
+        agent_service: AgentService = Depends(get_agent_service),
+        current_user: User = Depends(get_current_user) # [추가] 토큰 체크 및 유저 정보 주입
 ):
     try:
         # 1. 에이전트 실행 (결과가 나올 때까지 기다림)
@@ -63,7 +67,9 @@ async def chat(
 @router.post("/chat/stream")
 async def chat_stream(
         # [수정] chatRequest -> ChatRequest
-        request: ChatRequest, agent_service: AgentService = Depends(get_agent_service)
+        request: ChatRequest,
+        agent_service: AgentService = Depends(get_agent_service),
+        current_user: User = Depends(get_current_user) # [추가] 토큰 체크 및 유저 정보 주입
 ):
     async def event_generator():
         try:
@@ -90,10 +96,10 @@ async def chat_stream(
                 # 2. 도구 사용 로그 전송
                 elif kind == 'on_tool_start':
                     # [수정] 콜론(:) 추가
-                    if event.get("name") == "search_": 
+                    if event.get("name") == "search_":
                         yield f"data: {LogStreamEvent(log='내부 DB 검색 실행...').model_dump_json(ensure_ascii=False)}\n\n"
                     # [수정] 콜론(:) 추가
-                    elif event.get("name") == "NEWS": 
+                    elif event.get("name") == "NEWS":
                         yield f"data: {LogStreamEvent(log='News 검색 중...').model_dump_json(ensure_ascii=False)}\n\n"
 
                 # 3. 답변 토큰 스트리밍 (TokenStreamEvent)
@@ -118,6 +124,9 @@ async def chat_stream(
 
 
 @router.get("/sync-status")
-async def get_sync_status(agent_service: AgentService = Depends(get_agent_service)):
+async def get_sync_status(
+    agent_service: AgentService = Depends(get_agent_service),
+    current_user: User = Depends(get_current_user) # [추가] 통계 확인 시에도 토큰 확인
+):
     """현재 지식 베이스에 뉴스가 얼마나 쌓였는지 확인하는 API"""
     return agent_service.get_knowledge_stats()
