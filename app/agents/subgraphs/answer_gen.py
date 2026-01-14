@@ -198,12 +198,22 @@ def answer_gen_agent(state: AnswerGenAgentState):
         log_agent_step("AnswerGen", "투자 분석 전달 응답 생성 시작", {"query": user_query})
         prompt = _make_invest_prompt(user_query, analysis_block, sources_block)
 
-    # HumanMessage로 prompt 추가 후 LLM 호출
-    llm_messages = messages + [HumanMessage(content=prompt)]
-    response = solar_chat.invoke(llm_messages)
+        # [수정 후] LLM에게는 '시스템 프롬프트'와 '핵심 요약 프롬프트'만 깔끔하게 보냄
+        current_time = get_current_time_str()
+        system_content = f"현재 시간: {current_time}\n\n{instruction_answer_gen}"
 
-    log_agent_step("AnswerGen", "응답 생성 완료", {"route": route, "answer": response.content})
-    return {"messages": messages + [response], "final_answer": response.content}
+        llm_messages = [
+            SystemMessage(content=system_content),
+            HumanMessage(content=prompt)
+        ]
+
+        # LLM 호출
+        response = solar_chat.invoke(llm_messages)
+
+        log_agent_step("AnswerGen", "응답 생성 완료", {"route": route, "answer": response.content})
+
+        # 반환할 때는 히스토리를 유지하여 오케스트레이터에 기록
+        return {"messages": messages + [response], "final_answer": response.content}
 
 
 # -------------------------
