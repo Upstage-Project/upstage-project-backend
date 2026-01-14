@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Firebase Token Test</title>
+
+  <!-- Firebase v8 (간단해서 추천) -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+</head>
+<body>
+  <button onclick="login()">Google Login</button>
+
+  <pre id="out"></pre>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "🔥 너 Firebase 웹 apiKey 🔥",
+      authDomain: "upstage-project.firebaseapp.com",
+      projectId: "upstage-project",
+    };
+
+    firebase.initializeApp(firebaseConfig);
+
+    async function login() {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      provider.addScope("email"); // ⭐ 중요
+
+      const result = await firebase.auth().signInWithPopup(provider);
+      const user = result.user;
+
+      const token = await user.getIdToken(true);
+
+      document.getElementById("out").innerText = token;
+      console.log("ID_TOKEN:", token);
+      console.log("EMAIL:", user.email);
+    }
+  </script>
+</body>
+</html>

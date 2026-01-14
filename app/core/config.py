@@ -1,11 +1,17 @@
+# app/core/config.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    ENV: str = "local"
-    DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
+class Settings(BaseSettings):
+    database_url: str
+    firebase_credentials_file: str
+    firebase_web_api_key: str  # ✅ 추가
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     HOST: str = "0.0.0.0"
     PORT: int = 8000

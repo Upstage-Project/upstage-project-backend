@@ -16,10 +16,8 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return (
-        f"postgresql+psycopg2://{settings.DB_USER}:{settings.DB_PASSWORD}"
-        f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-    )
+    return settings.database_url
+
 
 
 def run_migrations_offline() -> None:
