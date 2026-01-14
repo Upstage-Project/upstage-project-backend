@@ -2,7 +2,7 @@ from sqlalchemy import BigInteger, Text, ForeignKey, UniqueConstraint, Identity
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
-
+from typing import List, Dict, Any
 
 
 class User(Base):
@@ -33,6 +33,7 @@ class UserStock(Base):
     )
 
 
+
 class Question(Base):
     __tablename__ = "questions"
     __table_args__ = (
@@ -44,4 +45,19 @@ class Question(Base):
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     session_id: Mapped[str] = mapped_column(Text, nullable=False)
-    qa_list: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="[]")
+
+    # qa_list 데이터 구조:
+    # [
+    #   {
+    #     "question": "사용자 질문",
+    #     "answer": "에이전트 답변",
+    #     "created_at": "ISO-8601-Timestamp",
+    #     "metadata": {}
+    #   },
+    #   ...
+    # ]
+    qa_list: Mapped[List[Dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default="[]"
+    )

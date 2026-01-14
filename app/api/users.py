@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.db.session import get_db
-from app.deps import get_current_claims
+# from app.deps import get_current_claims
 from app.db.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login")
 def login(
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_claims),
+    #claims: dict = Depends(get_current_claims),
 ):
     uid = claims.get("uid")
     email = claims.get("email")
