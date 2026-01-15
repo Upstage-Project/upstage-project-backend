@@ -1,67 +1,55 @@
-# app/deps.py
-from fastapi.params import Depends
+# app/api/user_deps.py
+from fastapi import Depends, HTTPException, Header
+from sqlalchemy.orm import Session
+from firebase_admin import auth as firebase_auth
 
-# =========================
-# DB
-# =========================
-from app.core.db import engine
-
-
-def get_db_engine():
-    """
-    SQLAlchemy Engine DI
-    - Tool(get_portfolio_stocks)에서 engine.connect()로 사용
-    """
-    return engine
+from app.db.session import get_db
+from app.db.models import User
 
 
-# =========================
-# Vector / Embedding
-# =========================
-from app.repository.vector.vector_repo import (
-    VectorRepository,
-    ChromaDBRepository,
-)
-from app.service.vector_service import VectorService
-from app.service.embedding_service import EmbeddingService
+def get_current_user(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> User:
+    # Authorization: Bearer <token>
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization Bearer token")
 
+    token = authorization.split(" ", 1)[1].strip()
 
-def get_vector_repository() -> VectorRepository:
-    return ChromaDBRepository()
+    try:
+        decoded = firebase_auth.verify_id_token(token)
+        uid = decoded.get("uid") or decoded.get("sub")
+    except Exception as e:
+        print(f"Token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
 
+    if not uid:
+        raise HTTPException(status_code=401, detail="Token missing uid")
 
-def get_embedding_service() -> EmbeddingService:
-    return EmbeddingService()
+    user = db.query(User).filter(User.firebase_uid == uid).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found. Please login first.")
 
-
-def get_vector_service(
-    vector_repo: VectorRepository = Depends(get_vector_repository),
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
-) -> VectorService:
-    return VectorService(
-        vector_repository=vector_repo,
-        embedding_service=embedding_service,
-    )
+    return user
 
 
 # =========================
-# Ticker Resolver
+# Agent Service Dependency
 # =========================
-# ⚠️ 실제 클래스 경로는 네 프로젝트에 맞게 수정
-from app.agents.ticker_resolver import TickerResolver
 
-_ticker_resolver_singleton: TickerResolver | None = None
+from functools import lru_cache
+from app.service.agent_service import AgentService
 
 
-def get_ticker_resolver() -> TickerResolver:
-    """
-    회사명 / 티커 / 종목코드 정규화 Resolver
-    - 싱글톤으로 유지 (내부에 종목 마스터 캐시 가질 가능성 높음)
-    """
-    global _ticker_resolver_singleton
-    if _ticker_resolver_singleton is None:
-        _ticker_resolver_singleton = TickerResolver()
-        if hasattr(_ticker_resolver_singleton, "ensure_loaded"):
-            _ticker_resolver_singleton.ensure_loaded()
-    return _ticker_resolver_singleton
+@lru_cache(maxsize=1)
+def _agent_service_singleton() -> AgentService:
+    return AgentService()
+
+
+def get_agent_service() -> AgentService:
+    return _agent_service_singleton()
+
+
+
 

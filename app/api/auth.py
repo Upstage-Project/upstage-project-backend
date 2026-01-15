@@ -1,60 +1,78 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+# app/api/auth.py
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from pydantic import BaseModel # 데이터 구조 정의용
+from sqlalchemy.exc import IntegrityError
+
+from firebase_admin import auth as firebase_auth
 
 from app.db.session import get_db
 from app.db.models import User
-import firebase_admin.auth as auth # 파이어베이스 검증용
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# 1. 프론트엔드가 보내는 JSON 모양 정의 ({ provider: ..., token: ... })
+
 class LoginRequest(BaseModel):
-    provider: str
-    token: str
+    token: str  # 프론트가 보내는 Firebase ID Token
+
 
 @router.post("/login")
 def login(
-    request: LoginRequest, # ★ Body로 데이터를 받겠다고 선언
-    db: Session = Depends(get_db)
-    # ❌ claims: dict = Depends(get_current_claims)  <-- 이 줄 삭제!!
+    request: LoginRequest,
+    db: Session = Depends(get_db),
 ):
-    # 2. Body로 받은 토큰(request.token)을 직접 검증
+    # 1) Body로 받은 토큰 검증
     try:
-        # 파이어베이스 Admin SDK로 토큰 유효성 검사 및 정보 추출
-        decoded_token = auth.verify_id_token(request.token)
-        uid = decoded_token.get("uid")
-        email = decoded_token.get("email")
+        decoded = firebase_auth.verify_id_token(request.token)
+        uid = decoded.get("uid") or decoded.get("sub")
+        email = decoded.get("email")
     except Exception as e:
-        # 토큰이 가짜거나 만료됐으면 여기서 예외 처리
         print(f"Token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid authentication token")
 
-    # 3. 이후 로직은 기존과 동일
     if not uid:
         raise HTTPException(status_code=401, detail="Token missing uid")
     if not email:
         raise HTTPException(status_code=400, detail="Token missing email")
 
-    user = db.query(User).filter(User.firebase_uid == uid).first()
+    # 재조회 helper (IntegrityError 이후에도 동일 로직 사용)
+    def _get_user():
+        u = db.query(User).filter(User.firebase_uid == uid).first()
+        if not u:
+            u = db.query(User).filter(User.email == email).first()
+        return u
 
-    if not user:
-        user = User(firebase_uid=uid, email=email)
-        db.add(user)
-    else:
-        if user.email != email:
+    user = _get_user()
+
+    if user:
+        # ✅ uid 기준 유저면 email 최신화
+        if user.firebase_uid == uid and user.email != email:
             user.email = email
 
-    db.commit()
+        # ✅ email 기준 유저면 uid 연결(갱신)
+        if user.email == email and user.firebase_uid != uid:
+            user.firebase_uid = uid
+    else:
+        # ✅ 둘 다 없을 때만 생성
+        user = User(firebase_uid=uid, email=email)
+        db.add(user)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # ✅ 레이스/중복 요청이면 여기로 떨어짐 → rollback 후 재조회해서 정상 응답
+        db.rollback()
+        user = _get_user()
+        if not user:
+            raise HTTPException(status_code=409, detail="User already exists (unique constraint)")
+
     db.refresh(user)
 
-    # 4. 프론트엔드에 돌려줄 데이터
-    # (여기서 우리 서비스 전용 accessToken을 만들어 줄 수도 있음)
     return {
-        "accessToken": request.token, # 일단은 받은 토큰을 그대로 주거나, JWT 생성해서 리턴
+        "accessToken": request.token,  # 필요하면 여기서 우리 JWT로 교체 가능
         "user": {
             "id": user.id,
             "firebase_uid": user.firebase_uid,
             "email": user.email,
-        }
+        },
     }
