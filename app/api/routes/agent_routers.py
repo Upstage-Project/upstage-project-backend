@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -25,6 +26,9 @@ from app.api.user_deps import get_current_user
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
+# =========================
+# Utils
+# =========================
 def _ensure_session_id(request: ChatRequest) -> str:
     """
     프론트가 session_id를 안 보내도 백엔드에서 생성해서 유지.
@@ -35,38 +39,80 @@ def _ensure_session_id(request: ChatRequest) -> str:
     return str(uuid.uuid4())
 
 
+def _to_json(model_obj: Any) -> str:
+    """
+    Pydantic v2: model_dump_json()
+    Pydantic v1: json()
+    """
+    dump_json = getattr(model_obj, "model_dump_json", None)
+    if callable(dump_json):
+        return dump_json(ensure_ascii=False)
+
+    to_json = getattr(model_obj, "json", None)
+    if callable(to_json):
+        return to_json(ensure_ascii=False)
+
+    # fallback
+    import json
+    if isinstance(model_obj, dict):
+        return json.dumps(model_obj, ensure_ascii=False)
+    return json.dumps({"value": str(model_obj)}, ensure_ascii=False)
+
+
 def _extract_answer(result: Any) -> str:
     """
     agent_service.run_agent 결과에서 최종 answer를 최대한 안전하게 뽑기.
     """
-    answer = ""
-
-    # 1) dict 형태로 answer 키가 있으면 우선 사용
     if isinstance(result, dict):
-        if isinstance(result.get("answer"), str):
-            return result["answer"]
+        # 흔한 최종 키들 커버
+        for k in ("answer", "final_answer", "output", "response", "text", "content"):
+            v = result.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
 
-        # 2) answer_logs 마지막 ai 메시지 시도
-        answer_logs = result.get("answer_logs", [])
-        if answer_logs:
-            last_msg = answer_logs[-1]
-            msg_type = getattr(last_msg, "type", None) or (
-                last_msg.get("type") if isinstance(last_msg, dict) else None
-            )
-            msg_content = getattr(last_msg, "content", None) or (
-                last_msg.get("content") if isinstance(last_msg, dict) else None
-            )
-            if msg_type == "ai" and isinstance(msg_content, str):
+        # 중첩 구조 커버
+        for k in ("final", "result", "data"):
+            v = result.get(k)
+            if isinstance(v, dict):
+                for kk in ("answer", "final_answer", "output", "response", "text", "content"):
+                    vv = v.get(kk)
+                    if isinstance(vv, str) and vv.strip():
+                        return vv
+
+        # answer_logs / messages에서 마지막 ai 메시지
+        logs = result.get("answer_logs") or result.get("messages") or result.get("logs") or []
+        if logs:
+            last = logs[-1]
+            msg_type = getattr(last, "type", None) or (last.get("type") if isinstance(last, dict) else None)
+            msg_content = getattr(last, "content", None) or (last.get("content") if isinstance(last, dict) else None)
+            if msg_type in ("ai", "assistant") and isinstance(msg_content, str) and msg_content.strip():
                 return msg_content
 
-    # 3) 문자열로 바로 온 경우
-    if isinstance(result, str):
+    if isinstance(result, str) and result.strip():
         return result
 
-    if not answer:
-        answer = "응답을 생성하지 못했습니다."
+    return "응답을 생성하지 못했습니다."
 
-    return answer
+
+def _make_chat_response(answer: str, sid: str) -> Any:
+    """
+    ChatResponse 모델에 session_id가 없을 수도 있어 안전하게 반환.
+    """
+    try:
+        # pydantic v2
+        fields = getattr(ChatResponse, "model_fields", None)
+        if isinstance(fields, dict) and "session_id" in fields:
+            return ChatResponse(answer=answer, session_id=sid)
+
+        # pydantic v1
+        fields = getattr(ChatResponse, "__fields__", None)
+        if isinstance(fields, dict) and "session_id" in fields:
+            return ChatResponse(answer=answer, session_id=sid)
+
+        # session_id가 모델에 없으면 dict로
+        return {"answer": answer, "session_id": sid}
+    except Exception:
+        return {"answer": answer, "session_id": sid}
 
 
 # =========================
@@ -84,19 +130,26 @@ async def chat(
         inputs: Dict[str, Any] = {
             "user_query": request.query,
             "process_status": "start",
-            "user_id": getattr(current_user, "id", None),  # 필요하면 에이전트에서 활용
+            "user_id": getattr(current_user, "id", None),
         }
 
-        result = await agent_service.run_agent(inputs, session_id=sid)
+        # 무한대기 방지 (필요하면 늘려)
+        result = await asyncio.wait_for(agent_service.run_agent(inputs, session_id=sid), timeout=60)
+
         answer = _extract_answer(result)
 
-        # ⚠️ ChatResponse에 session_id 필드가 없으면 모델 수정 필요
-        return ChatResponse(answer=answer, session_id=sid)
+        logger.info(f"[agent/chat] session_id={sid} user_id={getattr(current_user,'id',None)} answer_len={len(answer)}")
+        return _make_chat_response(answer=answer, sid=sid)
+
+    except asyncio.TimeoutError:
+        logger.exception("[agent/chat] timeout")
+        raise AgentException("chat timeout (60s)")
 
     except (AgentException, KnowledgeBaseException):
         raise
+
     except Exception as e:
-        logger.exception("chat processing failed")
+        logger.exception("[agent/chat] processing failed")
         raise AgentException(f"chat processing failed: {str(e)}")
 
 
@@ -112,6 +165,9 @@ async def chat_stream(
     sid = _ensure_session_id(request)
 
     async def event_generator():
+        # 시작 이벤트(연결 확인용)
+        yield f"data: {_to_json(LogStreamEvent(log=f'stream_start session_id={sid}'))}\n\n"
+
         try:
             inputs: Dict[str, Any] = {
                 "user_query": request.query,
@@ -121,12 +177,12 @@ async def chat_stream(
 
             current_node = ""
 
-            # (선택) 스트림 시작 시 session_id 먼저 알려주고 싶으면
-            # yield f"data: {LogStreamEvent(log=f'session_id={sid}').model_dump_json(ensure_ascii=False)}\n\n"
-
             async for event in agent_service.stream_agent(inputs, session_id=sid):
                 kind = event.get("event")
                 name = event.get("name", "")
+
+                # (디버그가 필요하면 이 줄 주석 해제)
+                # logger.info(f"[SSE] event={kind} name={name}")
 
                 # 1) 단계 상태 로그
                 if kind == "on_chain_start":
@@ -134,19 +190,19 @@ async def chat_stream(
                         current_node = name
 
                     if name == "info_extract_agent_workflow":
-                        yield f"data: {LogStreamEvent(log='내부 지식 검색 중...').model_dump_json(ensure_ascii=False)}\n\n"
+                        yield f"data: {_to_json(LogStreamEvent(log='내부 지식 검색 중...'))}\n\n"
                     elif name == "Knowledge_augment_workflow":
-                        yield f"data: {LogStreamEvent(log='외부 지식 검색 중(News Search)...').model_dump_json(ensure_ascii=False)}\n\n"
+                        yield f"data: {_to_json(LogStreamEvent(log='외부 지식 검색 중(News Search)...'))}\n\n"
                     elif name == "answer_gen_agent_workflow":
-                        yield f"data: {LogStreamEvent(log='답변 생성 중...').model_dump_json(ensure_ascii=False)}\n\n"
+                        yield f"data: {_to_json(LogStreamEvent(log='답변 생성 중...'))}\n\n"
 
                 # 2) 도구 사용 로그
                 elif kind == "on_tool_start":
                     tool_name = event.get("name")
                     if tool_name == "search_":
-                        yield f"data: {LogStreamEvent(log='내부 DB 검색 실행...').model_dump_json(ensure_ascii=False)}\n\n"
+                        yield f"data: {_to_json(LogStreamEvent(log='내부 DB 검색 실행...'))}\n\n"
                     elif tool_name == "NEWS":
-                        yield f"data: {LogStreamEvent(log='News 검색 중...').model_dump_json(ensure_ascii=False)}\n\n"
+                        yield f"data: {_to_json(LogStreamEvent(log='News 검색 중...'))}\n\n"
 
                 # 3) 모델 토큰 스트리밍
                 elif kind == "on_chat_model_stream":
@@ -154,24 +210,25 @@ async def chat_stream(
                     chunk = data.get("chunk")
 
                     content = getattr(chunk, "content", None)
+                    if content is None and isinstance(chunk, dict):
+                        content = chunk.get("content")
+
+                    # ✅ 토큰이 오면 무조건 보냄 (필터링 때문에 답변이 0이 되는 문제 방지)
                     if content:
-                        # 단계 필터링(원하면 더 정확히 맞춰서 조정)
-                        if current_node not in ["info_extract_agent_workflow", "Knowledge_augment_workflow"]:
-                            yield f"data: {TokenStreamEvent(answer=content).model_dump_json(ensure_ascii=False)}\n\n"
+                        yield f"data: {_to_json(TokenStreamEvent(answer=str(content)))}\n\n"
 
             yield "data: [DONE]\n\n"
 
         except Exception as e:
-            logger.exception(f"Stream error: {e}")
-            yield f"data: {ErrorStreamEvent(error=str(e)).model_dump_json(ensure_ascii=False)}\n\n"
+            logger.exception(f"[agent/stream] error: {e}")
+            yield f"data: {_to_json(ErrorStreamEvent(error=str(e)))}\n\n"
+            yield "data: [DONE]\n\n"
 
     headers = {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        # nginx 같은 프록시가 버퍼링하면 SSE 끊기는 경우가 있어서
         "X-Accel-Buffering": "no",
     }
-
     return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
 

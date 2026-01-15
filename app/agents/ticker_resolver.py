@@ -3,34 +3,46 @@ import json
 import zipfile
 import io
 import xml.etree.ElementTree as ET
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import requests  # pip install requests 필요
 
 
 class TickerResolver:
     """
-    DART에서 제공하는 고유번호(CORPCODE) XML 파일을 다운로드 및 파싱하여,
-    기업명/종목코드를 입력받아 정확한 식별자(Corp Code)를 반환하는 클래스입니다.
+    - DART corpCode.xml 기반 기업 마스터를 다운로드/캐싱하고
+    - 사용자 입력(종목명/티커/부분검색/번호선택)으로 기업을 식별합니다.
+
+    ✅ 핵심 개선점
+    1) "3" 같은 번호 선택 지원 (직전에 만든 후보 리스트에서 선택)
+    2) exact match 실패 시 부분검색으로 candidates 생성
+    3) status를 명확히:
+       - success
+       - need_user_selection (후보 중 선택 필요)
+       - need_user_input (입력 자체가 너무 부실/불명확)
+       - error
     """
 
     MASTER_FILE_NAME = "company_master.json"
 
     def __init__(self, data_path: Optional[str] = None):
-        # 데이터 저장 경로 설정 (없으면 현재 디렉토리)
         self.data_path = data_path or os.path.join(os.getcwd(), self.MASTER_FILE_NAME)
 
         self._loaded = False
 
-        # 검색 인덱스 (메모리 로딩용)
+        # 검색 인덱스
         self.ticker_index: Dict[str, Dict[str, Any]] = {}
         self.name_index: Dict[str, Dict[str, Any]] = {}
 
+        # 원본 리스트(부분검색용)
+        self.company_list: List[Dict[str, Any]] = []
+
+    # -----------------------------
+    # Load / Cache
+    # -----------------------------
     def ensure_loaded(self):
-        """데이터가 로드되지 않았다면 로드합니다 (없으면 다운로드 시도)."""
         if self._loaded:
             return
 
-        # 1. 로컬에 마스터 파일이 없으면 DART에서 다운로드
         if not os.path.exists(self.data_path):
             print("[TickerResolver] Master file not found. Downloading from DART...")
             success = self._download_and_parse_dart_master()
@@ -39,14 +51,10 @@ class TickerResolver:
                 self._loaded = True
                 return
 
-        # 2. 파일 로드
         self._load_from_json_file()
         self._loaded = True
 
     def _download_and_parse_dart_master(self) -> bool:
-        """
-        DART Open API (corpCode.xml)를 호출하여 전체 기업 목록을 가져옵니다.
-        """
         api_key = os.getenv("DART_API_KEY")
         if not api_key:
             print("[TickerResolver] Error: DART_API_KEY is missing in environment variables.")
@@ -56,28 +64,21 @@ class TickerResolver:
         params = {"crtfc_key": api_key}
 
         try:
-            # 1. API 요청 (ZIP 파일 수신)
-            resp = requests.get(url, params=params, stream=True)
+            resp = requests.get(url, params=params, stream=True, timeout=30)
             resp.raise_for_status()
 
-            # 2. ZIP 메모리 해제 및 XML 파싱
             with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-                # 압축 파일 내의 XML 파일명 찾기 (보통 CORPCODE.xml)
                 xml_filename = zf.namelist()[0]
                 with zf.open(xml_filename) as xml_file:
                     tree = ET.parse(xml_file)
                     root = tree.getroot()
 
-            # 3. 데이터 추출 및 구조화
             company_list = []
-            # <result><list>...</list><list>...</list></result> 구조
             for item in root.findall("list"):
                 corp_code = item.findtext("corp_code")
                 corp_name = item.findtext("corp_name")
                 stock_code = item.findtext("stock_code")
 
-                # stock_code가 있는 경우(상장사)와 없는 경우(비상장) 모두 저장하되,
-                # 검색 효율을 위해 stock_code 공백 제거
                 stock_code = stock_code.strip() if stock_code else None
                 corp_name = corp_name.strip() if corp_name else ""
 
@@ -87,16 +88,15 @@ class TickerResolver:
                 entry = {
                     "company_name": corp_name,
                     "corp_code": corp_code,
-                    "stock_code": stock_code,  # "005930" or None
-                    "ticker": stock_code  # 호환성 필드
+                    "stock_code": stock_code,
+                    "ticker": stock_code,  # 호환 필드
                 }
                 company_list.append(entry)
 
             print(f"[TickerResolver] Parsed {len(company_list)} companies from DART.")
 
-            # 4. JSON 파일로 저장 (캐싱)
             with open(self.data_path, "w", encoding="utf-8") as f:
-                json.dump(company_list, f, ensure_ascii=False, indent=None)  # 용량 절약 위해 indent 제거
+                json.dump(company_list, f, ensure_ascii=False, indent=None)
 
             return True
 
@@ -105,70 +105,186 @@ class TickerResolver:
             return False
 
     def _load_from_json_file(self):
-        """로컬 JSON 파일에서 데이터를 메모리로 로드하고 인덱싱합니다."""
         print(f"[TickerResolver] Loading index from {self.data_path}...")
         try:
             with open(self.data_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            for item in data:
-                name = item.get("company_name")
-                ticker = item.get("stock_code")
+            self.company_list = data if isinstance(data, list) else []
 
-                # 결과 포맷 통일
+            for item in self.company_list:
+                name = (item.get("company_name") or "").strip()
+                ticker = (item.get("stock_code") or "").strip() or None
+
                 info = {
                     "status": "success",
                     "company_name": name,
                     "ticker": ticker,
                     "stock_code": ticker,
-                    "corp_code": item.get("corp_code")
+                    "corp_code": item.get("corp_code"),
                 }
 
-                # 1. 이름 인덱싱
                 if name:
+                    # 원문/정규화 키 둘 다 인덱싱
                     self.name_index[name] = info
-                    # 검색 편의: 공백제거+소문자 (예: "삼성 전자" -> "삼성전자")
                     self.name_index[name.replace(" ", "").lower()] = info
 
-                # 2. 티커 인덱싱 (상장사의 경우)
-                if ticker and ticker.strip():
+                if ticker:
                     self.ticker_index[ticker] = info
 
-            print(f"[TickerResolver] Loaded {len(data)} companies into memory.")
-
+            print(f"[TickerResolver] Loaded {len(self.company_list)} companies into memory.")
         except Exception as e:
             print(f"[TickerResolver] Failed to load JSON file: {e}")
+            self.company_list = []
 
-    def resolve(self, user_input: str) -> Dict[str, Any]:
+    # -----------------------------
+    # Utilities
+    # -----------------------------
+    @staticmethod
+    def _norm(s: str) -> str:
+        return (s or "").replace(" ", "").strip().lower()
+
+    def _build_candidate(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        name = (item.get("company_name") or "").strip()
+        ticker = (item.get("stock_code") or "").strip() or None
+        return {
+            "company_name": name,
+            "ticker": ticker,
+            "stock_code": ticker,
+            "corp_code": item.get("corp_code"),
+        }
+
+    def _search_candidates(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
-        사용자 입력(이름 또는 코드)을 바탕으로 기업 정보를 반환합니다.
+        부분검색 후보 생성:
+        - 회사명에 query 포함 (정규화 기준)
+        - 티커가 query로 시작(사용자가 2~5자리만 입력한 경우)
+        """
+        nq = self._norm(query)
+        if not nq:
+            return []
+
+        cands: List[Dict[str, Any]] = []
+
+        # 티커 partial
+        if nq.isdigit():
+            # 1~5자리 입력이면 티커 prefix로 찾기
+            for item in self.company_list:
+                t = (item.get("stock_code") or "").strip()
+                if t and t.startswith(nq):
+                    cands.append(self._build_candidate(item))
+                    if len(cands) >= limit:
+                        return cands
+
+        # 이름 contains
+        for item in self.company_list:
+            name = (item.get("company_name") or "").strip()
+            if not name:
+                continue
+            if nq in self._norm(name):
+                cands.append(self._build_candidate(item))
+                if len(cands) >= limit:
+                    break
+
+        # 중복 제거(같은 ticker/name)
+        seen = set()
+        uniq = []
+        for c in cands:
+            key = (c.get("ticker"), c.get("company_name"))
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(c)
+        return uniq[:limit]
+
+    # -----------------------------
+    # Public API
+    # -----------------------------
+    def resolve(
+        self,
+        user_input: str,
+        *,
+        last_candidates: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        user_input:
+          - "005930" (6자리 티커)
+          - "삼성전자" (회사명)
+          - "삼성" (부분검색 → 후보 리스트 반환)
+          - "3" (후보 리스트에서 3번 선택)
+
+        last_candidates:
+          - 직전 턴에 보여준 후보 리스트를 넘겨주면 "3" 선택 가능
         """
         self.ensure_loaded()
 
         query = str(user_input).strip()
         if not query:
-            return {"status": "error", "message": "Empty input"}
+            return {"status": "need_user_input", "message": "빈 입력입니다. 종목명 또는 6자리 종목코드를 입력해줘."}
 
-        # 1. 숫자 6자리면 Ticker로 우선 검색
+        # ✅ 0) 번호 선택 처리 ("3")
+        if query.isdigit() and len(query) < 6:
+            if last_candidates and len(last_candidates) > 0:
+                idx = int(query) - 1
+                if 0 <= idx < len(last_candidates):
+                    pick = last_candidates[idx]
+                    # pick에는 company_name/ticker/corp_code가 있어야 함
+                    return {
+                        "status": "success",
+                        "company_name": pick.get("company_name"),
+                        "ticker": pick.get("ticker"),
+                        "stock_code": pick.get("stock_code") or pick.get("ticker"),
+                        "corp_code": pick.get("corp_code"),
+                    }
+                return {
+                    "status": "need_user_selection",
+                    "message": f"번호가 범위를 벗어났어. 1~{len(last_candidates)} 중에서 골라줘.",
+                    "candidates": last_candidates,
+                }
+
+            # 후보가 없는데 "3"만 들어오면 애초에 선택 불가
+            return {
+                "status": "need_user_input",
+                "message": "지금은 후보 목록이 없어서 번호 선택(예: 3)을 할 수 없어. 종목명이나 6자리 종목코드를 입력해줘.",
+            }
+
+        # ✅ 1) 6자리 숫자면 ticker 정확히 검색
         if query.isdigit() and len(query) == 6:
             if query in self.ticker_index:
                 return self.ticker_index[query]
+            # 6자리인데 없으면 not_found(그래도 부분검색은 의미 없음)
+            return {
+                "status": "not_found",
+                "message": f"해당 6자리 종목코드를 찾지 못했어: '{query}'",
+                "ticker": query,
+                "stock_code": query,
+                "corp_code": None,
+            }
 
-        # 2. 이름으로 정확히 검색
+        # ✅ 2) 회사명 exact
         if query in self.name_index:
             return self.name_index[query]
 
-        # 3. 정규화된 이름(공백 제거)으로 검색
-        norm_query = query.replace(" ", "").lower()
+        # ✅ 3) 회사명 정규화 exact
+        norm_query = self._norm(query)
         if norm_query in self.name_index:
             return self.name_index[norm_query]
 
-        # 4. 검색 실패 (Fallback)
+        # ✅ 4) 부분검색 후보 생성
+        candidates = self._search_candidates(query, limit=5)
+        if candidates:
+            return {
+                "status": "need_user_selection",
+                "message": "여러 개가 걸렸어. 번호로 선택해줘.",
+                "candidates": candidates,
+            }
+
+        # ✅ 5) 완전 실패
         return {
             "status": "not_found",
-            "message": f"Could not find company: '{user_input}'",
+            "message": f"회사를 찾지 못했어: '{user_input}' (정확한 종목명 또는 6자리 종목코드를 입력해줘)",
             "company_name": user_input,
-            "ticker": query if query.isdigit() else None,
-            "stock_code": query if query.isdigit() else None,
-            "corp_code": None
+            "ticker": None,
+            "stock_code": None,
+            "corp_code": None,
         }

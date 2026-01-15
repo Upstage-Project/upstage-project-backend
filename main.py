@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
 from app.api.users import router as users_router
 from app.api.routes.user_stock import router as user_stock_router
-from app.api.routes.agent_routers import router as agent_router   # ✅ 추가
+from app.api.routes.agent_routers import router as agent_router
 
 from app.core.firebase import init_firebase
 
@@ -47,5 +47,4 @@ def startup_event():
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(user_stock_router, prefix="/api")
-app.include_router(agent_router, prefix="/api")   # ✅ 추가
-
+app.include_router(agent_router, prefix="/api")

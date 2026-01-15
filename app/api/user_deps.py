@@ -1,51 +1,83 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from firebase_admin import auth
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+
+from firebase_admin import auth as fb_auth
+
+from app.core.logger import logger
 from app.db.session import get_db
 from app.db.models import User
 
-# Bearer Token 추출기
-security = HTTPBearer()
+bearer = HTTPBearer(auto_error=False)
 
 
-def get_current_claims(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    """
-    HTTP Header의 Bearer Token을 파싱하여 Firebase Admin SDK로 검증합니다.
-    검증 성공 시 토큰의 payload(claims)를 반환합니다.
-    """
-    token = credentials.credentials
-    try:
-        # Firebase 토큰 검증
-        decoded_token = auth.verify_id_token(token)
-        return decoded_token
-    except Exception as e:
-        # 토큰 만료, 위변조 등 모든 인증 실패
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid authentication credentials: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+def _raise_401(detail: str):
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _get_or_create_user(db: Session, claims: dict) -> User:
+    uid = claims.get("uid")
+    email = claims.get("email")
+
+    if not uid:
+        _raise_401("Invalid token: missing uid")
+
+    user = db.query(User).filter(User.firebase_uid == uid).first()
+    if user:
+        # email이 바뀌었으면 갱신(선택)
+        if email and getattr(user, "email", None) != email:
+            user.email = email
+            db.commit()
+            db.refresh(user)
+        return user
+
+    user = User(firebase_uid=uid, email=email)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def get_current_user(
-        claims: dict = Depends(get_current_claims),
-        db: Session = Depends(get_db)
+    request: Request,
+    db: Session = Depends(get_db),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
 ) -> User:
-    """
-    검증된 토큰(claims)의 UID를 사용하여
-    DB에서 실제 User 객체를 조회하여 반환합니다.
-    """
-    uid = claims.get("uid")
-    if not uid:
-        raise HTTPException(status_code=401, detail="Token missing uid")
+    # 1) Authorization 헤더 자체가 없거나 파싱 실패
+    auth_header = request.headers.get("authorization")
+    if not auth_header:
+        logger.warning("[AUTH] Missing Authorization header")
+        _raise_401("Missing Authorization header")
 
-    # DB에서 유저 조회
-    user = db.query(User).filter(User.firebase_uid == uid).first()
+    # 2) HTTPBearer가 creds를 못 만들었으면 형식 문제
+    if creds is None:
+        logger.warning(f"[AUTH] Invalid Authorization header format: {auth_header!r}")
+        _raise_401("Invalid Authorization header format")
 
-    if not user:
-        # (선택사항) 회원가입이 안 된 상태라면 404를 띄우거나, 여기서 자동 가입시킬 수도 있습니다.
-        # 여기서는 보안을 위해 401 또는 404로 처리합니다.
-        raise HTTPException(status_code=404, detail="User not found in database")
+    # 3) Bearer 스킴 확인
+    if (creds.scheme or "").lower() != "bearer":
+        logger.warning(f"[AUTH] Authorization scheme is not Bearer: {creds.scheme!r}")
+        _raise_401("Authorization scheme must be Bearer")
 
-    return user
+    token = (creds.credentials or "").strip()
+    if not token:
+        logger.warning("[AUTH] Empty bearer token")
+        _raise_401("Empty bearer token")
+
+    # 4) Firebase ID token 검증
+    try:
+        claims = fb_auth.verify_id_token(token)
+    except Exception as e:
+        # ✅ 여기 로그가 401의 진짜 이유
+        logger.warning(f"[AUTH] verify_id_token failed: {type(e).__name__}: {e}")
+        _raise_401(f"Invalid ID token: {type(e).__name__}")
+
+    return _get_or_create_user(db, claims)

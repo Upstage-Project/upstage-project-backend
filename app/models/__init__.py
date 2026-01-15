@@ -14,7 +14,7 @@ KnowledgeResponse
 __all__ = [
     "BaseEntity",
     "AddKnowledgeRequest",
-    "KnowledgeResponse"
+    "KnowledgeResponse",
     "NewsArticle",
     "FinancialStatement",
     "BaseSchema",
@@ -25,5 +25,6 @@ __all__ = [
     "LogStreamEvent",
     "ErrorStreamEvent",
 ]
+
 
 
