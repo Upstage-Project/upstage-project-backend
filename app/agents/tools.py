@@ -83,10 +83,12 @@ def analyze_invest_query(user_query: str) -> Dict[str, Any]:
 판단 기준:
 - "PORTFOLIO":
     사용자의 보유 종목/포트폴리오 전체를 기준으로 정보를 묻는 질문
-    예) "내 포트폴리오 기준으로 요약해줘", "내가 가진 주식들 위험도 알려줘"
+    포트폴리오 관련 키워드: 포트폴리오, 보유 종목, 내 주식, 내가 가진, 내 계좌, 투자 현황, 보유 현황, 전체 종목, 전체 주식
+    예) "포트폴리오 조회해줘", "내 포트폴리오 분석해줘", "보유 종목 알려줘", "내 주식 현황 보여줘", 
+        "내가 가진 주식들 위험도 알려줘", "전체 종목 수익률 알려줘", "투자 현황 분석해줘"
 - "COMPANY":
     특정 기업에 대한 정보를 묻는 질문
-    예) "삼성전자 최근 실적 어때?", "NAVER 기업 정보 알려줘"
+    예) "삼성전자 최근 실적 어때?", "NAVER 기업 정보 알려줘", "005930 분석해줘"
 - "OTHER":
     위에 명확히 속하지 않는 일반 질문
 
@@ -94,6 +96,7 @@ def analyze_invest_query(user_query: str) -> Dict[str, Any]:
 - 반드시 JSON만 출력하세요. JSON 앞뒤에 다른 설명 텍스트를 넣지 마세요.
 - companies는 query_type이 "COMPANY"인 경우에만 채우고, 아닐 때는 []로 두세요.
 - 확실하지 않은 회사명은 companies에 넣지 마세요.
+- "포트폴리오", "보유 종목", "내 주식" 등의 표현이 있으면 반드시 PORTFOLIO로 분류하세요.
 """
 
     user_prompt = f"사용자 질의: {user_query!r}\n위 규칙에 따라 JSON만 출력하세요."
@@ -223,6 +226,7 @@ def add_many_to_invest_kb(
     """
     여러 문서를 한 번에 KB(VectorDB)에 저장합니다.
     뉴스 기사, 재무제표 등 다수의 문서를 배치로 저장할 때 사용합니다.
+    임베딩 토큰 제한(4000)을 고려하여 배치로 나누어 처리합니다.
     """
     print(f"\n[Tool: Add Many Knowledge] Adding {len(contents)} docs to KB...")
 
@@ -231,7 +235,7 @@ def add_many_to_invest_kb(
         if not vector_service:
             return {"status": "error", "message": "VectorService not found in config", "saved": 0}
 
-        # ✅ 빈 문자열/공백 문서 제거 (품질/에러 방지)
+        # ✅ 빈 문자열/공백 문서 제거 및 길이 제한 (품질/에러 방지)
         filtered = []
         filtered_meta = []
         if metadatas is None:
@@ -244,22 +248,53 @@ def add_many_to_invest_kb(
                 "saved": 0,
             }
 
+        MAX_CHARS_PER_DOC = 3000  # 문서당 최대 문자 수 (토큰 제한 고려)
+        
         for c, m in zip(contents, metadatas):
             c2 = (c or "").strip()
             if not c2:
                 continue
+            
+            # 문서가 너무 길면 잘라내기
+            if len(c2) > MAX_CHARS_PER_DOC:
+                c2 = c2[:MAX_CHARS_PER_DOC] + "..."
+                
             filtered.append(c2)
             filtered_meta.append(m or {"source": "external"})
 
         if not filtered:
             return {"status": "success", "message": "No valid contents to add.", "saved": 0}
 
-        vector_service.add_documents(filtered, filtered_meta)
+        # ✅ 배치로 나누어 처리 (토큰 제한 고려)
+        BATCH_SIZE = 10  # 한 번에 10개씩 처리
+        total_saved = 0
+        
+        for i in range(0, len(filtered), BATCH_SIZE):
+            batch_contents = filtered[i:i+BATCH_SIZE]
+            batch_metas = filtered_meta[i:i+BATCH_SIZE]
+            
+            try:
+                # 메타데이터 None 값 체크
+                for idx, meta in enumerate(batch_metas):
+                    none_keys = [k for k, v in meta.items() if v is None]
+                    if none_keys:
+                        print(f"[Tool: Add Many Knowledge] WARNING: Batch {i//BATCH_SIZE + 1}, Doc {idx}: metadata has None values in {none_keys}")
+                        print(f"  Full metadata: {meta}")
+                
+                vector_service.add_documents(batch_contents, batch_metas)
+                total_saved += len(batch_contents)
+                print(f"[Tool: Add Many Knowledge] Batch {i//BATCH_SIZE + 1}: Saved {len(batch_contents)} docs")
+            except Exception as batch_error:
+                print(f"[Tool: Add Many Knowledge] Batch {i//BATCH_SIZE + 1} error: {batch_error}")
+                # 메타데이터 디버깅
+                for idx, (content, meta) in enumerate(zip(batch_contents, batch_metas)):
+                    print(f"  Doc {idx}: content_len={len(content)}, meta={meta}")
+                # 배치 실패 시 계속 진행
 
         return {
             "status": "success",
-            "message": "Successfully added documents to investment knowledge base.",
-            "saved": len(filtered),
+            "message": f"Successfully added {total_saved}/{len(filtered)} documents to investment knowledge base.",
+            "saved": total_saved,
         }
 
     except Exception as e:
@@ -643,17 +678,17 @@ def get_portfolio_stocks(user_id: str, config: RunnableConfig) -> Dict[str, Any]
     if not engine:
         return {"status": "error", "user_id": user_id, "count": 0, "holdings": [], "error": "db_engine not found"}
 
-    join_stock_master = bool(config["configurable"].get("join_stock_master", False))
+    join_stock_master = bool(config["configurable"].get("join_stock_master", True))
 
     try:
         if not join_stock_master:
-            sql = text("SELECT user_id, stock_id FROM pf_items WHERE user_id = :user_id")
+            sql = text("SELECT user_id, stock_id FROM user_stocks WHERE user_id = :user_id")
         else:
             sql = text("""
-                SELECT p.user_id, p.stock_id, s.ticker, s.name
-                FROM pf_items p
-                JOIN stocks s ON s.id = p.stock_id
-                WHERE p.user_id = :user_id
+                SELECT us.user_id, us.stock_id, s.stock_id as ticker, s.stock_name as name
+                FROM user_stocks us
+                JOIN stocks s ON s.stock_id = us.stock_id
+                WHERE us.user_id = :user_id
             """)
 
         with engine.connect() as conn:

@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.core.logger import logger
 from app.agents.state import InfoCollectorAgentState
 from app.agents.tools import (
     get_portfolio_stocks,
@@ -73,6 +74,14 @@ def _reset_company_scope(collected: Dict[str, Any]):
     collected["articles"] = []
     collected["financials"] = None
     collected["fetch_article_index"] = 0
+
+
+def _clean_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """ChromaDB는 None 값을 허용하지 않으므로 필터링"""
+    cleaned = {k: v for k, v in metadata.items() if v is not None}
+    if len(cleaned) != len(metadata):
+        logger.info(f"Filtered metadata: {set(metadata.keys()) - set(cleaned.keys())} had None values")
+    return cleaned
 
 
 # -------------------------
@@ -379,7 +388,7 @@ def accumulate(state: InfoCollectorAgentState):
                 )
                 collected["kb_save_queue"].append({
                     "content": save_text,
-                    "metadata": {
+                    "metadata": _clean_metadata({
                         "type": "news_snippet",
                         "url": it.get("url"),
                         "id": it.get("id"),
@@ -388,7 +397,7 @@ def accumulate(state: InfoCollectorAgentState):
                         "stock_code": company.get("stock_code"),
                         "corp_code": company.get("corp_code"),
                         "source": it.get("source"),
-                    }
+                    })
                 })
         else:
             collected["news"] = []
@@ -428,7 +437,7 @@ def accumulate(state: InfoCollectorAgentState):
             )
             collected["kb_save_queue"].append({
                 "content": save_text,
-                "metadata": {
+                "metadata": _clean_metadata({
                     "type": "news_article",
                     "url": content.get("url"),
                     "published_at": content.get("published_at"),
@@ -436,7 +445,7 @@ def accumulate(state: InfoCollectorAgentState):
                     "stock_code": company.get("stock_code"),
                     "corp_code": company.get("corp_code"),
                     "publisher": content.get("publisher"),
-                }
+                })
             })
         else:
             collected.setdefault("article_errors", []).append(content)
@@ -456,14 +465,14 @@ def accumulate(state: InfoCollectorAgentState):
             )
             collected["kb_save_queue"].append({
                 "content": save_text,
-                "metadata": {
+                "metadata": _clean_metadata({
                     "type": "financials",
                     "corp_code": company.get("corp_code"),
                     "company_name": company.get("company_name"),
                     "stock_code": company.get("stock_code"),
                     "bsns_year": content.get("bsns_year"),
                     "report_type": content.get("report_type"),
-                }
+                })
             })
         else:
             collected["errors"].append({"tool": "get_financial_statement", "content": content})

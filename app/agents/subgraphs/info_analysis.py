@@ -20,6 +20,7 @@ class InfoAnalysisAgentState(Dict):
     user_id: str
     analysis_data: Dict[str, Any]
     analysis_results: List[Dict[str, Any]]
+    collected: Dict[str, Any]  # info_collector에서 수집한 정보
 
 
 # -------------------------
@@ -30,30 +31,59 @@ def plan_analysis(state: InfoAnalysisAgentState):
     data = state.get("analysis_data") or {"targets": [], "current_idx": 0, "phase": "setup"}
     results = state.get("analysis_results") or []
     user_id = state.get("user_id")
+    collected = state.get("collected", {})
 
     if data.get("phase") == "analyzing":
         return loop_analysis(state)
 
-    user_query = messages[-1].content if messages else ""
+    # collected에서 포트폴리오 정보 확인
+    portfolio_holdings = collected.get("portfolio_holdings", [])
+    portfolio_mode = collected.get("portfolio_mode", False)
 
-    if "포트폴리오" in user_query or "내 종목" in user_query:
-        return {
-            "analysis_data": data,
-            "analysis_results": results,
-            "messages": [AIMessage(
-                content="Fetch Portfolio",
-                tool_calls=[{"name": "get_portfolio_stocks", "args": {"user_id": user_id}, "id": "pf_call"}]
-            )]
-        }
-    else:
-        return {
-            "analysis_data": data,
-            "analysis_results": results,
-            "messages": [AIMessage(
-                content="Resolve Ticker",
-                tool_calls=[{"name": "resolve_ticker", "args": {"user_input": user_query}, "id": "resolve_call"}]
-            )]
-        }
+    # 포트폴리오 모드이고 holdings가 있으면 직접 사용
+    if portfolio_mode and portfolio_holdings:
+        targets = []
+        for h in portfolio_holdings:
+            targets.append({
+                "name": h.get("name") or h.get("stock_id"),
+                "code": h.get("ticker") or h.get("stock_id")
+            })
+        
+        data["targets"] = targets
+        data["phase"] = "analyzing"
+        data["current_idx"] = 0
+        
+        return {"analysis_data": data}
+
+    # 포트폴리오가 아닌 경우, 마지막 메시지에서 사용자 쿼리 추출
+    user_query = ""
+    for msg in reversed(messages):
+        if hasattr(msg, "type") and msg.type == "human":
+            user_query = msg.content
+            break
+        elif hasattr(msg, "content") and isinstance(msg.content, str):
+            if msg.content not in ["END", "Analyzing user query...", "Loading portfolio stocks...", "Resolving company ticker...", "Saving collected documents to KB..."]:
+                user_query = msg.content
+                break
+
+    if not user_query:
+        user_query = messages[-1].content if messages else ""
+
+    # ✅ END 메시지, JSON, 시스템 메시지 처리 - 분석 건너뛰기
+    if not user_query or user_query in ["END", ""] or user_query.startswith("{") or user_query.startswith("["):
+        data["phase"] = "analyzing"
+        data["targets"] = []
+        return {"analysis_data": data}
+
+    # 단일 회사 분석
+    return {
+        "analysis_data": data,
+        "analysis_results": results,
+        "messages": [AIMessage(
+            content="Resolve Ticker",
+            tool_calls=[{"name": "resolve_ticker", "args": {"user_input": user_query}, "id": "resolve_call"}]
+        )]
+    }
 
 
 # -------------------------

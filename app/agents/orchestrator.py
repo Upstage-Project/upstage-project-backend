@@ -42,11 +42,16 @@ def run_collector(state: OrchestratorState):
 
 def run_analyst(state: OrchestratorState):
     print("\n>>> [Orchestrator] Starting Info Analysis...")
+    
+    # collected 정보를 info_analysis로 전달
+    collected = state.get("collected", {})
+    
     result = info_analysis_graph.invoke({
         "messages": state["messages"],
         "user_id": state["user_id"],
         "analysis_data": state.get("analysis_data", {}),
-        "analysis_results": state.get("analysis_results", [])
+        "analysis_results": state.get("analysis_results", []),
+        "collected": collected  # 포트폴리오 정보 전달
     })
     return {
         "analysis_data": result.get("analysis_data", {}),

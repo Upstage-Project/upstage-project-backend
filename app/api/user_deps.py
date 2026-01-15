@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -13,6 +14,9 @@ from app.db.session import get_db
 from app.db.models import User
 
 bearer = HTTPBearer(auto_error=False)
+
+# ✅ 테스트 모드: .env에서 DISABLE_AUTH=true 설정 시 인증 우회
+DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").lower() == "true"
 
 
 def _raise_401(detail: str):
@@ -51,10 +55,23 @@ def get_current_user(
     db: Session = Depends(get_db),
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
 ) -> User:
+    # ✅ 테스트 모드: 인증 우회하고 user_id=5 반환
+    if DISABLE_AUTH:
+        logger.warning("[AUTH] DISABLE_AUTH=true - Using test user (id=5)")
+        user = db.query(User).filter(User.id == 5).first()
+        if not user:
+            logger.error("[AUTH] Test user (id=5) not found in database")
+            _raise_401("Test user not configured")
+        return user
+    
     # 1) Authorization 헤더 자체가 없거나 파싱 실패
     auth_header = request.headers.get("authorization")
+    logger.info(f"[AUTH] Request from {request.client.host if request.client else 'unknown'} to {request.url.path}")
+    logger.info(f"[AUTH] Authorization header present: {bool(auth_header)}")
+    
     if not auth_header:
         logger.warning("[AUTH] Missing Authorization header")
+        logger.info(f"[AUTH] All headers: {dict(request.headers)}")
         _raise_401("Missing Authorization header")
 
     # 2) HTTPBearer가 creds를 못 만들었으면 형식 문제

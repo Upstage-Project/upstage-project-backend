@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from typing import Any, Dict, Optional
 
@@ -230,6 +231,49 @@ async def chat_stream(
         "X-Accel-Buffering": "no",
     }
     return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
+
+
+# =========================
+# 투자 분석 (Orchestrator 직접 사용)
+# =========================
+@router.post("/invest")
+async def run_invest(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """투자 분석 오케스트레이터를 직접 실행하는 엔드포인트"""
+    from app.agents.orchestrator import run_investment_orchestrator
+    from app.deps import get_ticker_resolver, get_vector_service, get_db_engine
+    
+    sid = _ensure_session_id(request)
+    
+    try:
+        # Config 구성
+        config = {
+            "configurable": {
+                "ticker_resolver": get_ticker_resolver(),
+                "vector_service": get_vector_service(),
+                "db_engine": get_db_engine(),
+                "DART_API_KEY": os.getenv("DART_API_KEY"),
+            }
+        }
+        
+        user_id = getattr(current_user, "id", None)
+        
+        result = run_investment_orchestrator(
+            user_query=request.query,
+            user_id=str(user_id) if user_id else "unknown",
+            config=config
+        )
+        
+        answer = result.get("final_answer") or _extract_answer(result)
+        
+        logger.info(f"[agent/invest] session_id={sid} user_id={user_id} answer_len={len(answer)}")
+        return _make_chat_response(answer=answer, sid=sid)
+        
+    except Exception as e:
+        logger.exception("[agent/invest] processing failed")
+        raise AgentException(f"invest processing failed: {str(e)}")
 
 
 # =========================
