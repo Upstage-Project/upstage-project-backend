@@ -134,5 +134,5 @@ def run_real_test(user_query: str):
 
 
 if __name__ == "__main__":
-    query = "삼성전자의 최근 뉴스와 실적을 알려줘"
+    query = "카카오게임즈의 최근 뉴스와 실적을 알려줘"
     run_real_test(query)
