@@ -15,7 +15,7 @@ load_dotenv()
 from app.api.auth import router as auth_router
 from app.api.users import router as users_router
 from app.api.routes.user_stock import router as user_stock_router
-# from app.api.routes.agent_routers import router as agent_router  # 필요하면 나중에
+from app.api.routes.agent_routers import router as agent_router
 
 from app.core.firebase import init_firebase
 
@@ -53,4 +53,4 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(user_stock_router, prefix="/api")
 
-# app.include_router(agent_router)  # 에이전트 API 쓸 때만 활성화
+app.include_router(agent_router)  # 에이전트 API 쓸 때만 활성화
