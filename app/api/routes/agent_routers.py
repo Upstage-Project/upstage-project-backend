@@ -135,7 +135,7 @@ async def chat(
         }
 
         # 무한대기 방지 (필요하면 늘려)
-        result = await asyncio.wait_for(agent_service.run_agent(inputs, session_id=sid), timeout=60)
+        result = await asyncio.wait_for(agent_service.run_agent(inputs, session_id=sid), timeout=180)
 
         answer = _extract_answer(result)
 
@@ -144,7 +144,7 @@ async def chat(
 
     except asyncio.TimeoutError:
         logger.exception("[agent/chat] timeout")
-        raise AgentException("chat timeout (60s)")
+        raise AgentException("chat timeout (180s)")
 
     except (AgentException, KnowledgeBaseException):
         raise
